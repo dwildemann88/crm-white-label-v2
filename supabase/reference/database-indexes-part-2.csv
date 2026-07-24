@@ -1,0 +1,42 @@
+schemaname,tablename,indexname,indexdef
+public,pipelines,pipelines_pkey,CREATE UNIQUE INDEX pipelines_pkey ON public.pipelines USING btree (id)
+public,profiles,profiles_pkey,CREATE UNIQUE INDEX profiles_pkey ON public.profiles USING btree (id)
+public,role_permissions,role_permissions_permission_id_idx,CREATE INDEX role_permissions_permission_id_idx ON public.role_permissions USING btree (permission_id)
+public,role_permissions,role_permissions_pkey,"CREATE UNIQUE INDEX role_permissions_pkey ON public.role_permissions USING btree (role_id, permission_id)"
+public,roles,roles_organization_code_unique,"CREATE UNIQUE INDEX roles_organization_code_unique ON public.roles USING btree (organization_id, code)"
+public,roles,roles_organization_id_id_unique,"CREATE UNIQUE INDEX roles_organization_id_id_unique ON public.roles USING btree (organization_id, id)"
+public,roles,roles_organization_id_idx,CREATE INDEX roles_organization_id_idx ON public.roles USING btree (organization_id)
+public,roles,roles_pkey,CREATE UNIQUE INDEX roles_pkey ON public.roles USING btree (id)
+public,tags,tags_organization_active_idx,"CREATE INDEX tags_organization_active_idx ON public.tags USING btree (organization_id, is_active)"
+public,tags,tags_organization_code_unique,"CREATE UNIQUE INDEX tags_organization_code_unique ON public.tags USING btree (organization_id, code)"
+public,tags,tags_organization_id_id_unique,"CREATE UNIQUE INDEX tags_organization_id_id_unique ON public.tags USING btree (organization_id, id)"
+public,tags,tags_pkey,CREATE UNIQUE INDEX tags_pkey ON public.tags USING btree (id)
+public,task_activity_history,task_activity_history_pkey,CREATE UNIQUE INDEX task_activity_history_pkey ON public.task_activity_history USING btree (id)
+public,task_activity_history,task_activity_history_task_idx,"CREATE INDEX task_activity_history_task_idx ON public.task_activity_history USING btree (task_id, changed_at DESC)"
+public,task_reminders,task_reminders_pending_idx,CREATE INDEX task_reminders_pending_idx ON public.task_reminders USING btree (remind_at) WHERE (status = 'pending'::text)
+public,task_reminders,task_reminders_pkey,CREATE UNIQUE INDEX task_reminders_pkey ON public.task_reminders USING btree (id)
+public,task_reminders,task_reminders_unique,"CREATE UNIQUE INDEX task_reminders_unique ON public.task_reminders USING btree (task_id, user_id, channel, remind_at)"
+public,task_reminders,task_reminders_user_idx,"CREATE INDEX task_reminders_user_idx ON public.task_reminders USING btree (organization_id, user_id, status)"
+public,tasks,tasks_calendar_idx,"CREATE INDEX tasks_calendar_idx ON public.tasks USING btree (organization_id, starts_at, due_at)"
+public,tasks,tasks_organization_assigned_status_idx,"CREATE INDEX tasks_organization_assigned_status_idx ON public.tasks USING btree (organization_id, assigned_to, status)"
+public,tasks,tasks_organization_due_idx,"CREATE INDEX tasks_organization_due_idx ON public.tasks USING btree (organization_id, due_at)"
+public,tasks,tasks_organization_id_id_unique,"CREATE UNIQUE INDEX tasks_organization_id_id_unique ON public.tasks USING btree (organization_id, id)"
+public,tasks,tasks_organization_lead_idx,"CREATE INDEX tasks_organization_lead_idx ON public.tasks USING btree (organization_id, lead_id) WHERE (lead_id IS NOT NULL)"
+public,tasks,tasks_pkey,CREATE UNIQUE INDEX tasks_pkey ON public.tasks USING btree (id)
+storage,buckets,bname,CREATE UNIQUE INDEX bname ON storage.buckets USING btree (name)
+storage,buckets,buckets_pkey,CREATE UNIQUE INDEX buckets_pkey ON storage.buckets USING btree (id)
+storage,buckets_analytics,buckets_analytics_pkey,CREATE UNIQUE INDEX buckets_analytics_pkey ON storage.buckets_analytics USING btree (id)
+storage,buckets_analytics,buckets_analytics_unique_name_idx,CREATE UNIQUE INDEX buckets_analytics_unique_name_idx ON storage.buckets_analytics USING btree (name) WHERE (deleted_at IS NULL)
+storage,buckets_vectors,buckets_vectors_pkey,CREATE UNIQUE INDEX buckets_vectors_pkey ON storage.buckets_vectors USING btree (id)
+storage,migrations,migrations_name_key,CREATE UNIQUE INDEX migrations_name_key ON storage.migrations USING btree (name)
+storage,migrations,migrations_pkey,CREATE UNIQUE INDEX migrations_pkey ON storage.migrations USING btree (id)
+storage,objects,bucketid_objname,"CREATE UNIQUE INDEX bucketid_objname ON storage.objects USING btree (bucket_id, name)"
+storage,objects,idx_objects_bucket_id_name,"CREATE INDEX idx_objects_bucket_id_name ON storage.objects USING btree (bucket_id, name COLLATE ""C"")"
+storage,objects,idx_objects_bucket_id_name_lower,"CREATE INDEX idx_objects_bucket_id_name_lower ON storage.objects USING btree (bucket_id, lower(name) COLLATE ""C"")"
+storage,objects,name_prefix_search,CREATE INDEX name_prefix_search ON storage.objects USING btree (name text_pattern_ops)
+storage,objects,objects_pkey,CREATE UNIQUE INDEX objects_pkey ON storage.objects USING btree (id)
+storage,s3_multipart_uploads,idx_multipart_uploads_list,"CREATE INDEX idx_multipart_uploads_list ON storage.s3_multipart_uploads USING btree (bucket_id, key, created_at)"
+storage,s3_multipart_uploads,s3_multipart_uploads_pkey,CREATE UNIQUE INDEX s3_multipart_uploads_pkey ON storage.s3_multipart_uploads USING btree (id)
+storage,s3_multipart_uploads_parts,s3_multipart_uploads_parts_pkey,CREATE UNIQUE INDEX s3_multipart_uploads_parts_pkey ON storage.s3_multipart_uploads_parts USING btree (id)
+storage,vector_indexes,vector_indexes_name_bucket_id_idx,"CREATE UNIQUE INDEX vector_indexes_name_bucket_id_idx ON storage.vector_indexes USING btree (name, bucket_id)"
+storage,vector_indexes,vector_indexes_pkey,CREATE UNIQUE INDEX vector_indexes_pkey ON storage.vector_indexes USING btree (id)

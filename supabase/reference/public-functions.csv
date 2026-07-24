@@ -1,0 +1,6257 @@
+schema_name,function_name,arguments,definition
+public,add_crm_lead_note,"p_organization_id uuid, p_lead_id uuid, p_note text","CREATE OR REPLACE FUNCTION public.add_crm_lead_note(p_organization_id uuid, p_lead_id uuid, p_note text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare
+  actor_id uuid;
+  actor_name text;
+  clean_note text;
+  formatted_note text;
+  current_lead record;
+  created_note_id uuid;
+  created_at_value timestamptz;
+begin
+  actor_id := auth.uid();
+  clean_note := nullif(pg_catalog.btrim(p_note), '');
+
+  if actor_id is null then
+    raise exception
+      'É necessário estar autenticado para registrar observações.';
+  end if;
+
+  if clean_note is null then
+    raise exception
+      'A observação está vazia.';
+  end if;
+
+  if char_length(clean_note) > 10000 then
+    raise exception
+      'A observação ultrapassa o limite de 10.000 caracteres.';
+  end if;
+
+  if not private.is_organization_member(
+    p_organization_id
+  ) then
+    raise exception
+      'O usuário não pertence à empresa informada.';
+  end if;
+
+  if not (
+    private.is_organization_admin(
+      p_organization_id
+    )
+    or private.has_permission(
+      p_organization_id,
+      'leads.update'
+    )
+  ) then
+    raise exception
+      'Você não possui permissão para registrar observações.';
+  end if;
+
+  select
+    lead.id,
+    lead.contact_id,
+    lead.pipeline_id,
+    lead.assigned_to
+  into current_lead
+  from public.leads as lead
+  where lead.id = p_lead_id
+    and lead.organization_id = p_organization_id
+  for update;
+
+  if not found then
+    raise exception
+      'Lead não encontrado.';
+  end if;
+
+  if not private.user_can_access_pipeline(
+    actor_id,
+    current_lead.pipeline_id
+  ) then
+    raise exception
+      'Você não possui acesso ao funil deste lead.';
+  end if;
+
+  if not private.is_organization_admin(
+       p_organization_id
+     )
+     and not private.has_permission(
+       p_organization_id,
+       'leads.read_all'
+     )
+     and not (
+       current_lead.assigned_to = actor_id
+       or (
+         current_lead.assigned_to is null
+         and private.has_permission(
+           p_organization_id,
+           'leads.read_unassigned'
+         )
+       )
+     ) then
+    raise exception
+      'Este lead não está no seu escopo de acesso.';
+  end if;
+
+  select profile.full_name
+  into actor_name
+  from public.profiles as profile
+  where profile.id = actor_id;
+
+  formatted_note :=
+    coalesce(
+      nullif(pg_catalog.btrim(actor_name), ''),
+      'Usuário'
+    )
+    || ': '
+    || clean_note;
+
+  insert into public.lead_notes (
+    organization_id,
+    lead_id,
+    author_id,
+    body
+  )
+  values (
+    p_organization_id,
+    p_lead_id,
+    actor_id,
+    clean_note
+  )
+  returning id, created_at
+  into created_note_id, created_at_value;
+
+  update public.contacts
+  set
+    notes = pg_catalog.concat_ws(
+      E'\n\n',
+      nullif(pg_catalog.btrim(notes), ''),
+      formatted_note
+    ),
+    updated_at = now()
+  where id = current_lead.contact_id
+    and organization_id = p_organization_id;
+
+  update public.leads
+  set
+    updated_by = actor_id,
+    updated_at = now(),
+    last_activity_at = now()
+  where id = p_lead_id
+    and organization_id = p_organization_id;
+
+  return jsonb_build_object(
+    'note_id',
+    created_note_id,
+    'lead_id',
+    p_lead_id,
+    'created_at',
+    created_at_value,
+    'created',
+    true
+  );
+end;
+$function$
+"
+public,claim_crm_outbound_message,p_message_id uuid,"CREATE OR REPLACE FUNCTION public.claim_crm_outbound_message(p_message_id uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare
+  actor_id uuid := auth.uid();
+  target_message record;
+  dispatch_token uuid;
+  lock_started_at timestamptz;
+  dispatch_attempts integer := 0;
+
+  media_bucket text;
+  media_path text;
+  media_upload_status text;
+  media_caption text;
+  media_size_bytes bigint;
+begin
+  if actor_id is null then
+    raise exception
+      'É necessário estar autenticado para despachar mensagens.';
+  end if;
+
+  select
+    message.id as message_id,
+    message.organization_id,
+    message.conversation_id,
+    message.direction,
+    message.message_type,
+    message.body,
+    message.status,
+    message.sender_user_id,
+    message.sender_name_snapshot,
+    message.external_media_id,
+    message.media_storage_path,
+    message.mime_type,
+    message.file_name,
+    message.metadata,
+    conversation.channel,
+    conversation.external_contact_id,
+    contact.phone
+  into target_message
+  from public.messages as message
+  join public.conversations as conversation
+    on conversation.id = message.conversation_id
+   and conversation.organization_id =
+       message.organization_id
+  join public.contacts as contact
+    on contact.id = conversation.contact_id
+   and contact.organization_id =
+       conversation.organization_id
+  where message.id = p_message_id
+  for update of message;
+
+  if not found then
+    raise exception
+      'Mensagem não encontrada.';
+  end if;
+
+  if not private.is_organization_member(
+    target_message.organization_id
+  ) then
+    raise exception
+      'O usuário não pertence à empresa da mensagem.';
+  end if;
+
+  if not private.can_reply_conversation(
+    target_message.conversation_id
+  ) then
+    raise exception
+      'Você não possui permissão para responder esta conversa.';
+  end if;
+
+  if target_message.sender_user_id
+     is distinct from actor_id then
+    raise exception
+      'A mensagem deve ser despachada pelo usuário que a criou.';
+  end if;
+
+  if target_message.direction <> 'outbound' then
+    raise exception
+      'Somente mensagens de saída podem ser despachadas.';
+  end if;
+
+  if target_message.message_type not in (
+    'text',
+    'image',
+    'audio',
+    'video',
+    'document'
+  ) then
+    raise exception
+      'Este tipo de mensagem não pode ser despachado por esta função.';
+  end if;
+
+  if target_message.channel <> 'whatsapp' then
+    raise exception
+      'A conversa não utiliza o canal WhatsApp.';
+  end if;
+
+  if target_message.status in (
+    'sent',
+    'delivered',
+    'read'
+  ) then
+    return pg_catalog.jsonb_build_object(
+      'claimed', false,
+      'reason', 'already_dispatched',
+      'message_id', target_message.message_id,
+      'status', target_message.status
+    );
+  end if;
+
+  if target_message.status not in (
+    'queued',
+    'failed'
+  ) then
+    raise exception
+      'O status atual da mensagem não permite o despacho.';
+  end if;
+
+  if target_message.message_type = 'text' then
+    if nullif(
+      pg_catalog.btrim(target_message.body),
+      ''
+    ) is null then
+      raise exception
+        'A mensagem não possui conteúdo.';
+    end if;
+  else
+    media_bucket :=
+      coalesce(
+        nullif(
+          pg_catalog.btrim(
+            target_message.metadata
+              -> 'media'
+              ->> 'storage_bucket'
+          ),
+          ''
+        ),
+        'crm-whatsapp-media'
+      );
+
+    media_path :=
+      coalesce(
+        nullif(
+          pg_catalog.btrim(
+            target_message.media_storage_path
+          ),
+          ''
+        ),
+        nullif(
+          pg_catalog.btrim(
+            target_message.metadata
+              -> 'media'
+              ->> 'storage_path'
+          ),
+          ''
+        )
+      );
+
+    media_upload_status :=
+      nullif(
+        pg_catalog.btrim(
+          target_message.metadata
+            -> 'media'
+            ->> 'upload_status'
+        ),
+        ''
+      );
+
+    begin
+      media_size_bytes :=
+        nullif(
+          target_message.metadata
+            -> 'media'
+            ->> 'size_bytes',
+          ''
+        )::bigint;
+    exception
+      when invalid_text_representation then
+        media_size_bytes := null;
+    end;
+
+    if media_bucket <> 'crm-whatsapp-media' then
+      raise exception
+        'O bucket da mídia não é autorizado para despacho.';
+    end if;
+
+    if media_upload_status <> 'stored' then
+      raise exception
+        'O arquivo ainda não concluiu o upload para o armazenamento.';
+    end if;
+
+    if media_path is null then
+      raise exception
+        'A mídia não possui um caminho de armazenamento.';
+    end if;
+
+    if media_path not like (
+      target_message.organization_id::text
+      || '/'
+      || target_message.conversation_id::text
+      || '/'
+      || target_message.message_id::text
+      || '/%'
+    ) then
+      raise exception
+        'O caminho da mídia não pertence à mensagem informada.';
+    end if;
+
+    if nullif(
+      pg_catalog.btrim(
+        target_message.mime_type
+      ),
+      ''
+    ) is null then
+      raise exception
+        'A mídia não possui tipo MIME.';
+    end if;
+
+    if nullif(
+      pg_catalog.btrim(
+        target_message.file_name
+      ),
+      ''
+    ) is null then
+      raise exception
+        'A mídia não possui nome de arquivo.';
+    end if;
+
+    if not exists (
+      select 1
+      from storage.objects as object
+      where object.bucket_id = media_bucket
+        and object.name = media_path
+    ) then
+      raise exception
+        'O arquivo não foi encontrado no armazenamento.';
+    end if;
+
+    media_caption :=
+      nullif(
+        pg_catalog.btrim(
+          coalesce(
+            target_message.body,
+            ''
+          )
+        ),
+        ''
+      );
+
+    if media_caption in (
+      'Imagem enviada',
+      'Áudio enviado',
+      'Vídeo enviado',
+      'Documento enviado'
+    ) then
+      media_caption := null;
+    end if;
+
+    if target_message.message_type = 'audio' then
+      media_caption := null;
+    end if;
+  end if;
+
+  begin
+    lock_started_at :=
+      nullif(
+        target_message.metadata
+          ->> 'dispatch_started_at',
+        ''
+      )::timestamptz;
+  exception
+    when invalid_text_representation then
+      lock_started_at := null;
+  end;
+
+  if lock_started_at is not null
+     and lock_started_at >
+         now() - interval '2 minutes' then
+    return pg_catalog.jsonb_build_object(
+      'claimed', false,
+      'reason', 'dispatch_in_progress',
+      'message_id', target_message.message_id
+    );
+  end if;
+
+  begin
+    dispatch_attempts :=
+      coalesce(
+        nullif(
+          target_message.metadata
+            ->> 'dispatch_attempts',
+          ''
+        )::integer,
+        0
+      );
+  exception
+    when invalid_text_representation then
+      dispatch_attempts := 0;
+  end;
+
+  dispatch_token := gen_random_uuid();
+
+  update public.messages
+  set
+    status = 'queued',
+    failed_at = null,
+    error_message = null,
+    metadata =
+      (
+        coalesce(metadata, '{}'::jsonb)
+        - 'dispatch_token'
+        - 'dispatch_started_at'
+      )
+      || pg_catalog.jsonb_build_object(
+        'dispatch_token',
+        dispatch_token::text,
+        'dispatch_started_at',
+        now(),
+        'dispatch_attempts',
+        dispatch_attempts + 1
+      )
+  where id = target_message.message_id;
+
+  return pg_catalog.jsonb_build_object(
+    'claimed', true,
+    'message_id', target_message.message_id,
+    'organization_id',
+      target_message.organization_id,
+    'conversation_id',
+      target_message.conversation_id,
+    'body',
+      case
+        when target_message.message_type = 'text'
+          then pg_catalog.btrim(target_message.body)
+        else coalesce(media_caption, '')
+      end,
+    'caption',
+      media_caption,
+    'message_type',
+      target_message.message_type,
+    'sender_name',
+      coalesce(
+        target_message.sender_name_snapshot,
+        'Usuário'
+      ),
+    'to',
+      coalesce(
+        nullif(
+          pg_catalog.btrim(
+            target_message.external_contact_id
+          ),
+          ''
+        ),
+        nullif(
+          pg_catalog.btrim(
+            target_message.phone
+          ),
+          ''
+        )
+      ),
+    'media_bucket',
+      media_bucket,
+    'media_storage_path',
+      media_path,
+    'mime_type',
+      target_message.mime_type,
+    'file_name',
+      target_message.file_name,
+    'size_bytes',
+      media_size_bytes,
+    'dispatch_token',
+      dispatch_token,
+    'dispatch_attempt',
+      dispatch_attempts + 1
+  );
+end;
+$function$
+"
+public,claim_crm_outbound_template,p_message_id uuid,"CREATE OR REPLACE FUNCTION public.claim_crm_outbound_template(p_message_id uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare
+  actor_id uuid := auth.uid();
+  target_message record;
+
+  template_data jsonb;
+  template_name text;
+  language_code text;
+  template_parameters jsonb;
+  customer_name text;
+
+  dispatch_token uuid;
+  lock_started_at timestamptz;
+  dispatch_attempts integer := 0;
+begin
+  if actor_id is null then
+    raise exception
+      'É necessário estar autenticado para despachar templates.';
+  end if;
+
+  select
+    message.id as message_id,
+    message.organization_id,
+    message.conversation_id,
+    message.direction,
+    message.message_type,
+    message.body,
+    message.status,
+    message.sender_user_id,
+    message.sender_name_snapshot,
+    message.metadata,
+    conversation.channel,
+    conversation.external_contact_id,
+    contact.phone
+  into target_message
+  from public.messages as message
+  join public.conversations as conversation
+    on conversation.id =
+       message.conversation_id
+   and conversation.organization_id =
+       message.organization_id
+  join public.contacts as contact
+    on contact.id =
+       conversation.contact_id
+   and contact.organization_id =
+       conversation.organization_id
+  where message.id =
+        p_message_id
+  for update of message;
+
+  if not found then
+    raise exception
+      'Mensagem não encontrada.';
+  end if;
+
+  if not private.is_organization_member(
+    target_message.organization_id
+  ) then
+    raise exception
+      'O usuário não pertence à empresa da mensagem.';
+  end if;
+
+  if not private.can_reply_conversation(
+    target_message.conversation_id
+  ) then
+    raise exception
+      'Você não possui permissão para responder esta conversa.';
+  end if;
+
+  if target_message.sender_user_id
+     is distinct from actor_id then
+    raise exception
+      'O template deve ser despachado pelo usuário que o criou.';
+  end if;
+
+  if target_message.direction <>
+     'outbound' then
+    raise exception
+      'Somente mensagens de saída podem ser despachadas.';
+  end if;
+
+  if target_message.message_type <>
+     'template' then
+    raise exception
+      'Esta função aceita apenas mensagens de template.';
+  end if;
+
+  if target_message.channel <>
+     'whatsapp' then
+    raise exception
+      'A conversa não utiliza o canal WhatsApp.';
+  end if;
+
+  template_data :=
+    coalesce(
+      target_message.metadata
+        -> 'whatsapp_template',
+      '{}'::jsonb
+    );
+
+  template_name :=
+    nullif(
+      pg_catalog.btrim(
+        template_data ->> 'name'
+      ),
+      ''
+    );
+
+  language_code :=
+    nullif(
+      pg_catalog.btrim(
+        template_data
+          ->> 'language_code'
+      ),
+      ''
+    );
+
+  template_parameters :=
+    coalesce(
+      template_data
+        -> 'parameters',
+      '[]'::jsonb
+    );
+
+  if template_name is null
+     or language_code is null then
+    raise exception
+      'Os metadados do template estão incompletos.';
+  end if;
+
+  if template_name <>
+     'reativar_chat'
+     or language_code <>
+        'pt_BR' then
+    raise exception
+      'O template registrado não é autorizado para esta etapa.';
+  end if;
+
+  if pg_catalog.jsonb_typeof(
+    template_parameters
+  ) <> 'array'
+     or pg_catalog.jsonb_array_length(
+       template_parameters
+     ) <> 1 then
+    raise exception
+      'Os parâmetros do template registrado são inválidos.';
+  end if;
+
+  customer_name :=
+    nullif(
+      pg_catalog.btrim(
+        template_parameters ->> 0
+      ),
+      ''
+    );
+
+  if customer_name is null then
+    raise exception
+      'O template registrado não possui o nome do contato.';
+  end if;
+
+  if target_message.status in (
+    'sent',
+    'delivered',
+    'read'
+  ) then
+    return pg_catalog.jsonb_build_object(
+      'claimed',
+        false,
+      'reason',
+        'already_dispatched',
+      'message_id',
+        target_message.message_id,
+      'status',
+        target_message.status
+    );
+  end if;
+
+  if target_message.status not in (
+    'queued',
+    'failed'
+  ) then
+    raise exception
+      'O status atual do template não permite o despacho.';
+  end if;
+
+  begin
+    lock_started_at :=
+      nullif(
+        target_message.metadata
+          ->> 'dispatch_started_at',
+        ''
+      )::timestamptz;
+  exception
+    when invalid_text_representation then
+      lock_started_at := null;
+  end;
+
+  if lock_started_at is not null
+     and lock_started_at >
+         now() - interval '2 minutes' then
+    return pg_catalog.jsonb_build_object(
+      'claimed',
+        false,
+      'reason',
+        'dispatch_in_progress',
+      'message_id',
+        target_message.message_id
+    );
+  end if;
+
+  begin
+    dispatch_attempts :=
+      coalesce(
+        nullif(
+          target_message.metadata
+            ->> 'dispatch_attempts',
+          ''
+        )::integer,
+        0
+      );
+  exception
+    when invalid_text_representation then
+      dispatch_attempts := 0;
+  end;
+
+  dispatch_token :=
+    gen_random_uuid();
+
+  update public.messages
+  set
+    status = 'queued',
+    failed_at = null,
+    error_message = null,
+    metadata =
+      (
+        coalesce(
+          metadata,
+          '{}'::jsonb
+        )
+        - 'dispatch_token'
+        - 'dispatch_started_at'
+      )
+      || pg_catalog.jsonb_build_object(
+        'dispatch_token',
+          dispatch_token::text,
+        'dispatch_started_at',
+          now(),
+        'dispatch_attempts',
+          dispatch_attempts + 1
+      )
+  where id =
+        target_message.message_id;
+
+  return pg_catalog.jsonb_build_object(
+    'claimed',
+      true,
+    'message_id',
+      target_message.message_id,
+    'organization_id',
+      target_message.organization_id,
+    'conversation_id',
+      target_message.conversation_id,
+    'body',
+      target_message.body,
+    'message_type',
+      'template',
+    'template_name',
+      template_name,
+    'language_code',
+      language_code,
+    'parameters',
+      template_parameters,
+    'customer_name',
+      customer_name,
+    'sender_name',
+      coalesce(
+        target_message.sender_name_snapshot,
+        'Usuário'
+      ),
+    'to',
+      coalesce(
+        nullif(
+          pg_catalog.btrim(
+            target_message.external_contact_id
+          ),
+          ''
+        ),
+        nullif(
+          pg_catalog.btrim(
+            target_message.phone
+          ),
+          ''
+        )
+      ),
+    'dispatch_token',
+      dispatch_token,
+    'dispatch_attempt',
+      dispatch_attempts + 1
+  );
+end;
+$function$
+"
+public,complete_crm_outbound_message,"p_message_id uuid, p_dispatch_token uuid, p_external_message_id text, p_provider_response jsonb","CREATE OR REPLACE FUNCTION public.complete_crm_outbound_message(p_message_id uuid, p_dispatch_token uuid, p_external_message_id text DEFAULT NULL::text, p_provider_response jsonb DEFAULT '{}'::jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare
+  completed_message_id uuid;
+  safe_response jsonb;
+begin
+  safe_response :=
+    case
+      when jsonb_typeof(
+        coalesce(
+          p_provider_response,
+          '{}'::jsonb
+        )
+      ) = 'object'
+      then coalesce(
+        p_provider_response,
+        '{}'::jsonb
+      )
+      else jsonb_build_object(
+        'raw',
+        p_provider_response
+      )
+    end;
+
+  update public.messages
+  set
+    status = 'sent',
+    external_message_id = nullif(
+      pg_catalog.btrim(
+        p_external_message_id
+      ),
+      ''
+    ),
+    failed_at = null,
+    error_message = null,
+    metadata =
+      (
+        coalesce(metadata, '{}'::jsonb)
+        - 'dispatch_token'
+        - 'dispatch_started_at'
+      )
+      || jsonb_build_object(
+        'delivery_mode', 'make_whatsapp',
+        'dispatched_at', now(),
+        'provider_response', safe_response
+      )
+  where id = p_message_id
+    and status = 'queued'
+    and metadata ->> 'dispatch_token' =
+        p_dispatch_token::text
+  returning id into completed_message_id;
+
+  if completed_message_id is null then
+    raise exception
+      'A mensagem não está disponível para conclusão deste despacho.';
+  end if;
+
+  return jsonb_build_object(
+    'message_id', completed_message_id,
+    'completed', true,
+    'status', 'sent',
+    'external_message_id',
+      nullif(
+        pg_catalog.btrim(
+          p_external_message_id
+        ),
+        ''
+      )
+  );
+end;
+$function$
+"
+public,create_crm_lead,"p_organization_id uuid, p_pipeline_id uuid, p_stage_id uuid, p_source_id uuid, p_full_name text, p_phone text, p_email text, p_city text, p_state text, p_title text, p_assigned_to uuid, p_priority text, p_temperature text, p_score smallint, p_monthly_bill numeric, p_estimated_value numeric, p_external_lead_id text, p_raw_payload jsonb","CREATE OR REPLACE FUNCTION public.create_crm_lead(p_organization_id uuid, p_pipeline_id uuid, p_stage_id uuid, p_source_id uuid, p_full_name text, p_phone text DEFAULT NULL::text, p_email text DEFAULT NULL::text, p_city text DEFAULT NULL::text, p_state text DEFAULT NULL::text, p_title text DEFAULT NULL::text, p_assigned_to uuid DEFAULT NULL::uuid, p_priority text DEFAULT 'medium'::text, p_temperature text DEFAULT 'cold'::text, p_score smallint DEFAULT 0, p_monthly_bill numeric DEFAULT NULL::numeric, p_estimated_value numeric DEFAULT NULL::numeric, p_external_lead_id text DEFAULT NULL::text, p_raw_payload jsonb DEFAULT '{}'::jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare
+  actor_id uuid;
+
+  target_assigned_to uuid;
+
+  normalized_phone text;
+  normalized_email text;
+
+  contact_by_phone uuid;
+  contact_by_email uuid;
+  target_contact_id uuid;
+
+  existing_lead_id uuid;
+  new_lead_id uuid;
+begin
+  actor_id := auth.uid();
+
+  if actor_id is null then
+    raise exception
+      'É necessário estar autenticado para cadastrar um lead.';
+  end if;
+
+
+  -- =======================================================
+  -- VALIDAR EMPRESA E PERMISSÃO
+  -- =======================================================
+
+  if not private.is_organization_member(
+    p_organization_id
+  ) then
+    raise exception
+      'O usuário não pertence à empresa informada.';
+  end if;
+
+
+  if not private.has_permission(
+    p_organization_id,
+    'leads.create'
+  ) then
+    raise exception
+      'Você não possui permissão para cadastrar leads.';
+  end if;
+
+
+  -- =======================================================
+  -- VALIDAR DADOS DO CONTATO
+  -- =======================================================
+
+  if nullif(
+    pg_catalog.btrim(p_full_name),
+    ''
+  ) is null then
+    raise exception
+      'Informe o nome do contato.';
+  end if;
+
+
+  normalized_phone :=
+    public.normalize_phone(p_phone);
+
+  normalized_email :=
+    public.normalize_email(p_email);
+
+
+  if normalized_phone is null
+     and normalized_email is null then
+    raise exception
+      'Informe pelo menos um telefone ou e-mail.';
+  end if;
+
+
+  if p_state is not null
+     and p_state !~ '^[A-Z]{2}$' then
+    raise exception
+      'O estado deve possuir duas letras maiúsculas.';
+  end if;
+
+
+  -- =======================================================
+  -- VALIDAR FUNIL E ETAPA
+  -- =======================================================
+
+  if not exists (
+    select 1
+    from public.pipeline_stages as stage
+    where stage.id = p_stage_id
+      and stage.pipeline_id = p_pipeline_id
+      and stage.organization_id =
+          p_organization_id
+      and stage.is_active = true
+  ) then
+    raise exception
+      'A etapa não pertence ao funil informado ou está inativa.';
+  end if;
+
+
+  if not private.can_operate_pipeline_stage(
+    p_stage_id
+  ) then
+    raise exception
+      'Você não possui acesso operacional à etapa selecionada.';
+  end if;
+
+
+  -- =======================================================
+  -- VALIDAR ORIGEM
+  -- =======================================================
+
+  if not exists (
+    select 1
+    from public.lead_sources as source
+    where source.id = p_source_id
+      and source.organization_id =
+          p_organization_id
+      and source.is_active = true
+  ) then
+    raise exception
+      'A origem selecionada não existe ou está inativa.';
+  end if;
+
+
+  -- =======================================================
+  -- VALIDAR RESPONSÁVEL
+  -- Quando não for informado, o próprio usuário recebe.
+  -- =======================================================
+
+  target_assigned_to :=
+    coalesce(
+      p_assigned_to,
+      actor_id
+    );
+
+
+  if target_assigned_to <> actor_id
+     and not private.has_permission(
+       p_organization_id,
+       'leads.assign'
+     ) then
+    raise exception
+      'Você não possui permissão para atribuir o lead a outro usuário.';
+  end if;
+
+
+  if not private.user_can_access_pipeline(
+    target_assigned_to,
+    p_pipeline_id
+  ) then
+    raise exception
+      'O responsável não possui acesso ao funil selecionado.';
+  end if;
+
+
+  -- =======================================================
+  -- DEDUPLICAR LEAD EXTERNO
+  -- =======================================================
+
+  if nullif(
+    pg_catalog.btrim(p_external_lead_id),
+    ''
+  ) is not null then
+
+    select lead.id
+    into existing_lead_id
+    from public.leads as lead
+    where lead.organization_id =
+          p_organization_id
+      and lead.source_id =
+          p_source_id
+      and lead.external_lead_id =
+          pg_catalog.btrim(p_external_lead_id)
+    limit 1;
+
+
+    if existing_lead_id is not null then
+      return jsonb_build_object(
+        'lead_id',
+        existing_lead_id,
+        'contact_id',
+        null,
+        'created',
+        false,
+        'duplicate_external_id',
+        true
+      );
+    end if;
+
+  end if;
+
+
+  -- =======================================================
+  -- LOCALIZAR CONTATO EXISTENTE
+  -- =======================================================
+
+  if normalized_phone is not null then
+
+    select contact.id
+    into contact_by_phone
+    from public.contacts as contact
+    where contact.organization_id =
+          p_organization_id
+      and contact.phone_normalized =
+          normalized_phone
+    order by contact.created_at
+    limit 1;
+
+  end if;
+
+
+  if normalized_email is not null then
+
+    select contact.id
+    into contact_by_email
+    from public.contacts as contact
+    where contact.organization_id =
+          p_organization_id
+      and contact.email_normalized =
+          normalized_email
+    order by contact.created_at
+    limit 1;
+
+  end if;
+
+
+  if contact_by_phone is not null
+     and contact_by_email is not null
+     and contact_by_phone <>
+         contact_by_email then
+
+    raise exception
+      'O telefone e o e-mail informados pertencem a contatos diferentes.';
+
+  end if;
+
+
+  target_contact_id :=
+    coalesce(
+      contact_by_phone,
+      contact_by_email
+    );
+
+
+  -- =======================================================
+  -- CRIAR OU ATUALIZAR CONTATO
+  -- =======================================================
+
+  if target_contact_id is null then
+
+    insert into public.contacts (
+      organization_id,
+      full_name,
+      phone,
+      email,
+      city,
+      state,
+      created_by
+    )
+    values (
+      p_organization_id,
+      pg_catalog.btrim(p_full_name),
+      nullif(
+        pg_catalog.btrim(p_phone),
+        ''
+      ),
+      normalized_email,
+      nullif(
+        pg_catalog.btrim(p_city),
+        ''
+      ),
+      nullif(
+        pg_catalog.btrim(p_state),
+        ''
+      ),
+      actor_id
+    )
+    returning id
+    into target_contact_id;
+
+  else
+
+    update public.contacts
+    set
+      full_name =
+        pg_catalog.btrim(p_full_name),
+
+      phone = coalesce(
+        nullif(
+          pg_catalog.btrim(p_phone),
+          ''
+        ),
+        phone
+      ),
+
+      email = coalesce(
+        normalized_email,
+        email
+      ),
+
+      city = coalesce(
+        nullif(
+          pg_catalog.btrim(p_city),
+          ''
+        ),
+        city
+      ),
+
+      state = coalesce(
+        nullif(
+          pg_catalog.btrim(p_state),
+          ''
+        ),
+        state
+      ),
+
+      updated_at = now()
+
+    where id = target_contact_id
+      and organization_id =
+          p_organization_id;
+
+  end if;
+
+
+  -- =======================================================
+  -- CRIAR O LEAD
+  -- Os gatilhos já criados registrarão etapa e atribuição.
+  -- =======================================================
+
+  insert into public.leads (
+    organization_id,
+    contact_id,
+    pipeline_id,
+    stage_id,
+    source_id,
+    title,
+    assigned_to,
+    priority,
+    temperature,
+    score,
+    monthly_bill,
+    estimated_value,
+    external_lead_id,
+    raw_payload,
+    created_by,
+    updated_by
+  )
+  values (
+    p_organization_id,
+    target_contact_id,
+    p_pipeline_id,
+    p_stage_id,
+    p_source_id,
+    nullif(
+      pg_catalog.btrim(p_title),
+      ''
+    ),
+    target_assigned_to,
+    p_priority,
+    p_temperature,
+    p_score,
+    p_monthly_bill,
+    p_estimated_value,
+    nullif(
+      pg_catalog.btrim(p_external_lead_id),
+      ''
+    ),
+    coalesce(
+      p_raw_payload,
+      '{}'::jsonb
+    ),
+    actor_id,
+    actor_id
+  )
+  returning id
+  into new_lead_id;
+
+
+  return jsonb_build_object(
+    'lead_id',
+    new_lead_id,
+    'contact_id',
+    target_contact_id,
+    'created',
+    true,
+    'duplicate_external_id',
+    false
+  );
+end;
+$function$
+"
+public,create_crm_lead_full,"p_organization_id uuid, p_pipeline_id uuid, p_stage_id uuid, p_source_id uuid, p_full_name text, p_phone text, p_email text, p_city text, p_state text, p_title text, p_assigned_to uuid, p_priority text, p_temperature text, p_score smallint, p_monthly_bill numeric, p_estimated_value numeric, p_external_lead_id text, p_raw_payload jsonb, p_company_name text, p_notes text, p_utm_campaign text, p_tag_names text[], p_custom_values jsonb","CREATE OR REPLACE FUNCTION public.create_crm_lead_full(p_organization_id uuid, p_pipeline_id uuid, p_stage_id uuid, p_source_id uuid, p_full_name text, p_phone text DEFAULT NULL::text, p_email text DEFAULT NULL::text, p_city text DEFAULT NULL::text, p_state text DEFAULT NULL::text, p_title text DEFAULT NULL::text, p_assigned_to uuid DEFAULT NULL::uuid, p_priority text DEFAULT 'medium'::text, p_temperature text DEFAULT 'cold'::text, p_score smallint DEFAULT 0, p_monthly_bill numeric DEFAULT NULL::numeric, p_estimated_value numeric DEFAULT NULL::numeric, p_external_lead_id text DEFAULT NULL::text, p_raw_payload jsonb DEFAULT '{}'::jsonb, p_company_name text DEFAULT NULL::text, p_notes text DEFAULT NULL::text, p_utm_campaign text DEFAULT NULL::text, p_tag_names text[] DEFAULT ARRAY[]::text[], p_custom_values jsonb DEFAULT '{}'::jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare
+  actor_id uuid;
+
+  creation_result jsonb;
+  created_lead_id uuid;
+  created_contact_id uuid;
+
+  custom_entry record;
+  field_record record;
+
+  value_text text;
+  value_number numeric;
+  value_boolean boolean;
+  value_date date;
+  value_timestamp timestamptz;
+  value_json jsonb;
+begin
+  actor_id := auth.uid();
+
+  if actor_id is null then
+    raise exception
+      'É necessário estar autenticado para cadastrar um lead.';
+  end if;
+
+
+  -- =======================================================
+  -- 1. EXECUTAR O CADASTRO PRINCIPAL
+  -- =======================================================
+
+  creation_result := public.create_crm_lead(
+    p_organization_id := p_organization_id,
+    p_pipeline_id := p_pipeline_id,
+    p_stage_id := p_stage_id,
+    p_source_id := p_source_id,
+    p_full_name := p_full_name,
+    p_phone := p_phone,
+    p_email := p_email,
+    p_city := p_city,
+    p_state := p_state,
+    p_title := p_title,
+    p_assigned_to := p_assigned_to,
+    p_priority := p_priority,
+    p_temperature := p_temperature,
+    p_score := p_score,
+    p_monthly_bill := p_monthly_bill,
+    p_estimated_value := p_estimated_value,
+    p_external_lead_id := p_external_lead_id,
+    p_raw_payload := coalesce(
+      p_raw_payload,
+      '{}'::jsonb
+    )
+  );
+
+
+  -- Se for duplicidade externa, não alterar o lead existente.
+
+  if coalesce(
+    (creation_result ->> 'created')::boolean,
+    false
+  ) = false then
+    return creation_result;
+  end if;
+
+
+  created_lead_id :=
+    (creation_result ->> 'lead_id')::uuid;
+
+  created_contact_id :=
+    (creation_result ->> 'contact_id')::uuid;
+
+
+  -- =======================================================
+  -- 2. EMPRESA DO CONTATO
+  -- =======================================================
+
+  if nullif(
+    pg_catalog.btrim(p_company_name),
+    ''
+  ) is not null then
+
+    update public.contacts
+    set
+      company_name =
+        pg_catalog.btrim(p_company_name),
+
+      updated_at = now()
+
+    where id = created_contact_id
+      and organization_id =
+          p_organization_id;
+
+  end if;
+
+
+  -- =======================================================
+  -- 3. CAMPANHA E OBSERVAÇÕES DO LEAD
+  -- =======================================================
+
+  update public.leads
+  set
+    utm_campaign = nullif(
+      pg_catalog.btrim(p_utm_campaign),
+      ''
+    ),
+
+    raw_payload =
+      coalesce(
+        raw_payload,
+        '{}'::jsonb
+      )
+
+      ||
+
+      case
+        when nullif(
+          pg_catalog.btrim(p_notes),
+          ''
+        ) is not null
+
+        then jsonb_build_object(
+          'notes',
+          pg_catalog.btrim(p_notes)
+        )
+
+        else '{}'::jsonb
+      end
+
+      ||
+
+      case
+        when nullif(
+          pg_catalog.btrim(p_company_name),
+          ''
+        ) is not null
+
+        then jsonb_build_object(
+          'company_name',
+          pg_catalog.btrim(p_company_name)
+        )
+
+        else '{}'::jsonb
+      end,
+
+    updated_by = actor_id,
+    updated_at = now()
+
+  where id = created_lead_id
+    and organization_id =
+        p_organization_id;
+
+
+  -- =======================================================
+  -- 4. VALIDAR E APLICAR ETIQUETAS
+  -- =======================================================
+
+  if exists (
+    select 1
+    from unnest(
+      coalesce(
+        p_tag_names,
+        array[]::text[]
+      )
+    ) as selected_tag(name)
+
+    where nullif(
+      pg_catalog.btrim(selected_tag.name),
+      ''
+    ) is not null
+
+      and not exists (
+        select 1
+        from public.tags as tag
+        where tag.organization_id =
+              p_organization_id
+
+          and tag.is_active = true
+
+          and pg_catalog.lower(tag.name) =
+              pg_catalog.lower(
+                pg_catalog.btrim(
+                  selected_tag.name
+                )
+              )
+      )
+  ) then
+
+    raise exception
+      'Uma ou mais etiquetas selecionadas não existem ou estão inativas.';
+
+  end if;
+
+
+  insert into public.lead_tags (
+    organization_id,
+    lead_id,
+    tag_id,
+    assigned_by
+  )
+  select
+    p_organization_id,
+    created_lead_id,
+    tag.id,
+    actor_id
+  from public.tags as tag
+
+  where tag.organization_id =
+        p_organization_id
+
+    and tag.is_active = true
+
+    and exists (
+      select 1
+      from unnest(
+        coalesce(
+          p_tag_names,
+          array[]::text[]
+        )
+      ) as selected_tag(name)
+
+      where pg_catalog.lower(
+        pg_catalog.btrim(
+          selected_tag.name
+        )
+      ) = pg_catalog.lower(tag.name)
+    )
+
+  on conflict (
+    lead_id,
+    tag_id
+  )
+  do nothing;
+
+
+  -- =======================================================
+  -- 5. CAMPOS PERSONALIZADOS
+  -- =======================================================
+
+  for custom_entry in
+    select
+      entry.key,
+      entry.value
+    from jsonb_each(
+      coalesce(
+        p_custom_values,
+        '{}'::jsonb
+      )
+    ) as entry
+  loop
+
+    -- Ignorar valores vazios.
+
+    if custom_entry.value = 'null'::jsonb then
+      continue;
+    end if;
+
+    if jsonb_typeof(custom_entry.value) = 'string'
+       and nullif(
+         pg_catalog.btrim(
+           custom_entry.value #>> '{}'
+         ),
+         ''
+       ) is null then
+      continue;
+    end if;
+
+
+    select
+      field.id,
+      field.field_type
+    into field_record
+    from public.custom_fields as field
+
+    where field.organization_id =
+          p_organization_id
+
+      and field.code =
+          custom_entry.key
+
+      and field.is_active = true
+
+      and (
+        field.pipeline_id is null
+        or field.pipeline_id =
+           p_pipeline_id
+      )
+
+    limit 1;
+
+
+    if not found then
+      raise exception
+        'Campo personalizado inválido: %',
+        custom_entry.key;
+    end if;
+
+
+    value_text := null;
+    value_number := null;
+    value_boolean := null;
+    value_date := null;
+    value_timestamp := null;
+    value_json := null;
+
+
+    case field_record.field_type
+
+      when 'text',
+           'textarea',
+           'phone',
+           'email',
+           'url',
+           'user' then
+
+        value_text :=
+          pg_catalog.btrim(
+            custom_entry.value #>> '{}'
+          );
+
+
+      when 'number',
+           'currency' then
+
+        value_number :=
+          (custom_entry.value #>> '{}')::numeric;
+
+
+      when 'boolean' then
+
+        if jsonb_typeof(
+          custom_entry.value
+        ) = 'boolean' then
+
+          value_boolean :=
+            (custom_entry.value #>> '{}')::boolean;
+
+        else
+
+          value_boolean := case
+            when pg_catalog.lower(
+              pg_catalog.btrim(
+                custom_entry.value #>> '{}'
+              )
+            ) in (
+              'true',
+              'sim',
+              '1'
+            )
+            then true
+
+            when pg_catalog.lower(
+              pg_catalog.btrim(
+                custom_entry.value #>> '{}'
+              )
+            ) in (
+              'false',
+              'não',
+              'nao',
+              '0'
+            )
+            then false
+
+            else null
+          end;
+
+          if value_boolean is null then
+            raise exception
+              'Valor booleano inválido no campo %.',
+              custom_entry.key;
+          end if;
+
+        end if;
+
+
+      when 'date' then
+
+        value_date :=
+          (custom_entry.value #>> '{}')::date;
+
+
+      when 'datetime' then
+
+        value_timestamp :=
+          (custom_entry.value #>> '{}')::timestamptz;
+
+
+      when 'select' then
+
+        select option.value
+        into value_text
+        from public.custom_field_options
+          as option
+
+        where option.organization_id =
+              p_organization_id
+
+          and option.field_id =
+              field_record.id
+
+          and option.is_active = true
+
+          and (
+            option.value =
+              custom_entry.value #>> '{}'
+
+            or pg_catalog.lower(option.label) =
+               pg_catalog.lower(
+                 custom_entry.value #>> '{}'
+               )
+          )
+
+        limit 1;
+
+
+        if value_text is null then
+          raise exception
+            'Opção inválida no campo %.',
+            custom_entry.key;
+        end if;
+
+
+      when 'multiselect' then
+
+        if jsonb_typeof(
+          custom_entry.value
+        ) <> 'array' then
+          raise exception
+            'O campo % deve receber uma lista.',
+            custom_entry.key;
+        end if;
+
+
+        select jsonb_agg(
+          to_jsonb(option.value)
+          order by selected_option.position
+        )
+        into value_json
+
+        from jsonb_array_elements_text(
+          custom_entry.value
+        ) with ordinality
+          as selected_option(
+            selected_value,
+            position
+          )
+
+        join public.custom_field_options
+          as option
+
+          on option.organization_id =
+             p_organization_id
+
+          and option.field_id =
+              field_record.id
+
+          and option.is_active = true
+
+          and (
+            option.value =
+              selected_option.selected_value
+
+            or pg_catalog.lower(option.label) =
+               pg_catalog.lower(
+                 selected_option.selected_value
+               )
+          );
+
+
+        if value_json is null
+           or jsonb_array_length(value_json) <>
+              jsonb_array_length(
+                custom_entry.value
+              ) then
+
+          raise exception
+            'Uma ou mais opções são inválidas no campo %.',
+            custom_entry.key;
+        end if;
+
+
+      else
+
+        raise exception
+          'Tipo não suportado no campo %.',
+          custom_entry.key;
+
+    end case;
+
+
+    insert into public.lead_custom_values (
+      organization_id,
+      lead_id,
+      field_id,
+
+      value_text,
+      value_number,
+      value_boolean,
+      value_date,
+      value_timestamp,
+      value_json,
+
+      created_by,
+      updated_by
+    )
+    values (
+      p_organization_id,
+      created_lead_id,
+      field_record.id,
+
+      value_text,
+      value_number,
+      value_boolean,
+      value_date,
+      value_timestamp,
+      value_json,
+
+      actor_id,
+      actor_id
+    )
+
+    on conflict (
+      lead_id,
+      field_id
+    )
+    do update
+    set
+      value_text =
+        excluded.value_text,
+
+      value_number =
+        excluded.value_number,
+
+      value_boolean =
+        excluded.value_boolean,
+
+      value_date =
+        excluded.value_date,
+
+      value_timestamp =
+        excluded.value_timestamp,
+
+      value_json =
+        excluded.value_json,
+
+      updated_by =
+        actor_id,
+
+      updated_at =
+        now();
+
+  end loop;
+
+
+  return creation_result
+
+    || jsonb_build_object(
+      'enriched',
+      true
+    );
+end;
+$function$
+"
+public,create_crm_task,"p_organization_id uuid, p_title text, p_description text, p_task_type text, p_priority text, p_assigned_to uuid, p_lead_id uuid, p_starts_at timestamp with time zone, p_due_at timestamp with time zone, p_reminder_minutes integer","CREATE OR REPLACE FUNCTION public.create_crm_task(p_organization_id uuid, p_title text, p_description text, p_task_type text, p_priority text, p_assigned_to uuid, p_lead_id uuid, p_starts_at timestamp with time zone, p_due_at timestamp with time zone, p_reminder_minutes integer DEFAULT 0)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare
+  actor_id uuid := auth.uid();
+  new_task_id uuid;
+  target_remind_at timestamptz;
+begin
+  if actor_id is null then
+    raise exception 'É necessário estar autenticado para criar tarefas.';
+  end if;
+
+  if not private.is_organization_member(p_organization_id) then
+    raise exception 'O usuário não pertence à empresa informada.';
+  end if;
+
+  if not private.has_permission(p_organization_id, 'tasks.create') then
+    raise exception 'Você não possui permissão para criar tarefas.';
+  end if;
+
+  if nullif(pg_catalog.btrim(p_title), '') is null then
+    raise exception 'Informe o título da tarefa.';
+  end if;
+
+  if char_length(pg_catalog.btrim(p_title)) > 180 then
+    raise exception 'O título da tarefa deve possuir no máximo 180 caracteres.';
+  end if;
+
+  if p_task_type not in (
+    'call',
+    'whatsapp',
+    'visit',
+    'meeting',
+    'proposal',
+    'follow_up',
+    'internal',
+    'other'
+  ) then
+    raise exception 'Tipo de tarefa inválido.';
+  end if;
+
+  if p_priority not in ('low', 'medium', 'high', 'urgent') then
+    raise exception 'Prioridade da tarefa inválida.';
+  end if;
+
+  if p_starts_at is null or p_due_at is null then
+    raise exception 'Informe a data e o horário da tarefa.';
+  end if;
+
+  if p_due_at < p_starts_at then
+    raise exception 'O término da tarefa não pode ser anterior ao início.';
+  end if;
+
+  if p_reminder_minutes is null
+     or p_reminder_minutes < 0
+     or p_reminder_minutes > 525600 then
+    raise exception 'O intervalo do lembrete é inválido.';
+  end if;
+
+  if not exists (
+    select 1
+    from public.organization_members as member
+    where member.organization_id = p_organization_id
+      and member.user_id = p_assigned_to
+      and member.status = 'active'
+  ) then
+    raise exception 'O responsável não pertence à empresa ou está inativo.';
+  end if;
+
+  if p_assigned_to <> actor_id
+     and not private.has_permission(
+       p_organization_id,
+       'tasks.update_all'
+     ) then
+    raise exception 'Seu perfil só pode criar tarefas para si mesmo.';
+  end if;
+
+  if p_lead_id is not null then
+    if not exists (
+      select 1
+      from public.leads as lead
+      where lead.id = p_lead_id
+        and lead.organization_id = p_organization_id
+    ) then
+      raise exception 'O lead vinculado não pertence à empresa.';
+    end if;
+
+    if not private.can_view_lead(p_lead_id) then
+      raise exception 'O lead vinculado não está no seu escopo de acesso.';
+    end if;
+  end if;
+
+  insert into public.tasks (
+    organization_id,
+    lead_id,
+    title,
+    description,
+    task_type,
+    status,
+    priority,
+    assigned_to,
+    starts_at,
+    due_at,
+    metadata,
+    created_by,
+    updated_by
+  )
+  values (
+    p_organization_id,
+    p_lead_id,
+    pg_catalog.btrim(p_title),
+    nullif(pg_catalog.btrim(p_description), ''),
+    p_task_type,
+    'pending',
+    p_priority,
+    p_assigned_to,
+    p_starts_at,
+    p_due_at,
+    jsonb_build_object(
+      'reminder_minutes',
+      p_reminder_minutes
+    ),
+    actor_id,
+    actor_id
+  )
+  returning id into new_task_id;
+
+  if p_reminder_minutes > 0 then
+    target_remind_at :=
+      p_starts_at
+      - pg_catalog.make_interval(mins => p_reminder_minutes);
+
+    insert into public.task_reminders (
+      organization_id,
+      task_id,
+      user_id,
+      channel,
+      remind_at,
+      status,
+      created_by
+    )
+    values (
+      p_organization_id,
+      new_task_id,
+      p_assigned_to,
+      'in_app',
+      target_remind_at,
+      'pending',
+      actor_id
+    );
+  end if;
+
+  return jsonb_build_object(
+    'task_id', new_task_id,
+    'created', true,
+    'reminder_created', p_reminder_minutes > 0
+  );
+end;
+$function$
+"
+public,crm_phone_aliases,p_phone text,"CREATE OR REPLACE FUNCTION public.crm_phone_aliases(p_phone text)
+ RETURNS text[]
+ LANGUAGE plpgsql
+ IMMUTABLE PARALLEL SAFE
+ SET search_path TO ''
+AS $function$
+declare
+  digits text;
+  national_number text;
+  legacy_number text;
+  modern_number text;
+  aliases text[] := array[]::text[];
+begin
+  digits :=
+    pg_catalog.regexp_replace(
+      coalesce(
+        p_phone,
+        ''
+      ),
+      '[^0-9]',
+      '',
+      'g'
+    );
+
+  if digits = '' then
+    return aliases;
+  end if;
+
+  -- Remove prefixo internacional discado como 00.
+  if pg_catalog.left(
+    digits,
+    2
+  ) = '00' then
+    digits :=
+      pg_catalog.substr(
+        digits,
+        3
+      );
+  end if;
+
+  -- Remove somente o código do Brasil quando o tamanho
+  -- indica que ele realmente está presente.
+  --
+  -- Isso evita interpretar o DDD 55 como código do país.
+  if pg_catalog.length(
+    digits
+  ) in (12, 13)
+     and pg_catalog.left(
+       digits,
+       2
+     ) = '55' then
+    national_number :=
+      pg_catalog.substr(
+        digits,
+        3
+      );
+  else
+    national_number := digits;
+  end if;
+
+  aliases :=
+    aliases
+    || array[
+      national_number,
+      '55' || national_number
+    ];
+
+  -- Número móvel moderno:
+  -- DDD + 9 + oito dígitos.
+  --
+  -- Também produz a forma antiga sem o nono dígito.
+  if pg_catalog.length(
+    national_number
+  ) = 11
+     and pg_catalog.substr(
+       national_number,
+       3,
+       1
+     ) = '9' then
+
+    legacy_number :=
+      pg_catalog.substr(
+        national_number,
+        1,
+        2
+      )
+      || pg_catalog.substr(
+        national_number,
+        4
+      );
+
+    aliases :=
+      aliases
+      || array[
+        legacy_number,
+        '55' || legacy_number
+      ];
+
+  -- Número móvel antigo:
+  -- DDD + oito dígitos começando entre 6 e 9.
+  --
+  -- Também produz a forma moderna com o nono dígito.
+  elsif pg_catalog.length(
+    national_number
+  ) = 10
+        and pg_catalog.substr(
+          national_number,
+          3,
+          1
+        ) ~ '^[6-9]$' then
+
+    modern_number :=
+      pg_catalog.substr(
+        national_number,
+        1,
+        2
+      )
+      || '9'
+      || pg_catalog.substr(
+        national_number,
+        3
+      );
+
+    aliases :=
+      aliases
+      || array[
+        modern_number,
+        '55' || modern_number
+      ];
+  end if;
+
+  return (
+    select
+      pg_catalog.array_agg(
+        distinct alias_value
+      )
+    from pg_catalog.unnest(
+      aliases
+    ) as alias_value
+    where alias_value <> ''
+  );
+end;
+$function$
+"
+public,delete_crm_task,"p_organization_id uuid, p_task_id uuid","CREATE OR REPLACE FUNCTION public.delete_crm_task(p_organization_id uuid, p_task_id uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare
+  actor_id uuid := auth.uid();
+  deleted_task_id uuid;
+begin
+  if actor_id is null then
+    raise exception 'É necessário estar autenticado para excluir tarefas.';
+  end if;
+
+  if not private.can_delete_task(p_task_id) then
+    raise exception 'Você não possui permissão para excluir esta tarefa.';
+  end if;
+
+  delete from public.tasks
+  where id = p_task_id
+    and organization_id = p_organization_id
+  returning id into deleted_task_id;
+
+  if deleted_task_id is null then
+    raise exception 'Tarefa não encontrada ou indisponível para este usuário.';
+  end if;
+
+  return jsonb_build_object(
+    'task_id', deleted_task_id,
+    'deleted', true
+  );
+end;
+$function$
+"
+public,fail_crm_outbound_message,"p_message_id uuid, p_dispatch_token uuid, p_error_message text, p_provider_response jsonb","CREATE OR REPLACE FUNCTION public.fail_crm_outbound_message(p_message_id uuid, p_dispatch_token uuid, p_error_message text, p_provider_response jsonb DEFAULT '{}'::jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare
+  failed_message_id uuid;
+  safe_error text;
+  safe_response jsonb;
+begin
+  safe_error :=
+    left(
+      coalesce(
+        nullif(
+          pg_catalog.btrim(
+            p_error_message
+          ),
+          ''
+        ),
+        'Falha não especificada no envio.'
+      ),
+      1000
+    );
+
+  safe_response :=
+    case
+      when jsonb_typeof(
+        coalesce(
+          p_provider_response,
+          '{}'::jsonb
+        )
+      ) = 'object'
+      then coalesce(
+        p_provider_response,
+        '{}'::jsonb
+      )
+      else jsonb_build_object(
+        'raw',
+        p_provider_response
+      )
+    end;
+
+  update public.messages
+  set
+    status = 'failed',
+    failed_at = now(),
+    error_message = safe_error,
+    metadata =
+      (
+        coalesce(metadata, '{}'::jsonb)
+        - 'dispatch_token'
+        - 'dispatch_started_at'
+      )
+      || jsonb_build_object(
+        'delivery_mode', 'make_whatsapp',
+        'dispatch_failed_at', now(),
+        'last_dispatch_error', safe_error,
+        'provider_response', safe_response
+      )
+  where id = p_message_id
+    and status = 'queued'
+    and metadata ->> 'dispatch_token' =
+        p_dispatch_token::text
+  returning id into failed_message_id;
+
+  if failed_message_id is null then
+    raise exception
+      'A mensagem não está disponível para registrar a falha deste despacho.';
+  end if;
+
+  return jsonb_build_object(
+    'message_id', failed_message_id,
+    'failed', true,
+    'status', 'failed',
+    'error', safe_error
+  );
+end;
+$function$
+"
+public,fail_crm_whatsapp_media_upload,"p_organization_id uuid, p_message_id uuid, p_error_message text","CREATE OR REPLACE FUNCTION public.fail_crm_whatsapp_media_upload(p_organization_id uuid, p_message_id uuid, p_error_message text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare
+  actor_id uuid := auth.uid();
+  target_message record;
+  safe_error text;
+begin
+  if actor_id is null then
+    raise exception
+      'É necessário estar autenticado para registrar a falha.';
+  end if;
+
+  if not private.is_organization_member(
+    p_organization_id
+  ) then
+    raise exception
+      'O usuário não pertence à empresa informada.';
+  end if;
+
+  select
+    message.id,
+    message.sender_user_id,
+    message.direction,
+    message.message_type,
+    message.status
+  into target_message
+  from public.messages as message
+  where message.id =
+        p_message_id
+    and message.organization_id =
+        p_organization_id
+  for update;
+
+  if not found then
+    raise exception
+      'Mensagem de mídia não encontrada.';
+  end if;
+
+  if target_message.sender_user_id
+     is distinct from actor_id then
+    raise exception
+      'A falha deve ser registrada pelo usuário que preparou a mensagem.';
+  end if;
+
+  if target_message.direction <>
+     'outbound'
+     or target_message.message_type not in (
+       'image',
+       'audio',
+       'video',
+       'document'
+     ) then
+    raise exception
+      'A mensagem informada não é uma mídia de saída.';
+  end if;
+
+  safe_error :=
+    pg_catalog.left(
+      coalesce(
+        nullif(
+          pg_catalog.btrim(
+            p_error_message
+          ),
+          ''
+        ),
+        'Falha ao enviar o arquivo para o armazenamento.'
+      ),
+      1000
+    );
+
+  update public.messages
+  set
+    status = 'failed',
+    failed_at = now(),
+    error_message =
+      safe_error,
+    metadata =
+      (
+        coalesce(
+          metadata,
+          '{}'::jsonb
+        )
+        - 'media'
+      )
+      || pg_catalog.jsonb_build_object(
+        'media',
+        coalesce(
+          metadata -> 'media',
+          '{}'::jsonb
+        )
+        || pg_catalog.jsonb_build_object(
+          'upload_status',
+            'failed',
+          'upload_failed_at',
+            now(),
+          'upload_error',
+            safe_error
+        )
+      )
+  where id =
+        target_message.id
+    and organization_id =
+        p_organization_id
+    and status in (
+      'queued',
+      'failed'
+    );
+
+  return pg_catalog.jsonb_build_object(
+    'failed',
+      true,
+    'message_id',
+      target_message.id,
+    'status',
+      'failed',
+    'error',
+      safe_error
+  );
+end;
+$function$
+"
+public,finalize_crm_whatsapp_media_upload,"p_organization_id uuid, p_message_id uuid","CREATE OR REPLACE FUNCTION public.finalize_crm_whatsapp_media_upload(p_organization_id uuid, p_message_id uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare
+  actor_id uuid := auth.uid();
+  target_message record;
+  expected_bucket text;
+  expected_path text;
+  expected_size bigint;
+  object_metadata jsonb;
+  stored_size bigint;
+begin
+  if actor_id is null then
+    raise exception
+      'É necessário estar autenticado para concluir o upload.';
+  end if;
+
+  if not private.is_organization_member(
+    p_organization_id
+  ) then
+    raise exception
+      'O usuário não pertence à empresa informada.';
+  end if;
+
+  select
+    message.id,
+    message.organization_id,
+    message.conversation_id,
+    message.sender_user_id,
+    message.direction,
+    message.message_type,
+    message.status,
+    message.media_storage_path,
+    message.metadata
+  into target_message
+  from public.messages as message
+  where message.id =
+        p_message_id
+    and message.organization_id =
+        p_organization_id
+  for update;
+
+  if not found then
+    raise exception
+      'Mensagem de mídia não encontrada.';
+  end if;
+
+  if target_message.sender_user_id
+     is distinct from actor_id then
+    raise exception
+      'O upload deve ser concluído pelo usuário que preparou a mensagem.';
+  end if;
+
+  if target_message.direction <>
+     'outbound'
+     or target_message.message_type not in (
+       'image',
+       'audio',
+       'video',
+       'document'
+     ) then
+    raise exception
+      'A mensagem informada não é uma mídia de saída.';
+  end if;
+
+  if target_message.status <>
+     'queued' then
+    raise exception
+      'O status atual da mensagem não permite concluir o upload.';
+  end if;
+
+  expected_bucket :=
+    nullif(
+      pg_catalog.btrim(
+        target_message.metadata
+          -> 'media'
+          ->> 'storage_bucket'
+      ),
+      ''
+    );
+
+  expected_path :=
+    nullif(
+      pg_catalog.btrim(
+        target_message.metadata
+          -> 'media'
+          ->> 'storage_path'
+      ),
+      ''
+    );
+
+  begin
+    expected_size :=
+      nullif(
+        target_message.metadata
+          -> 'media'
+          ->> 'size_bytes',
+        ''
+      )::bigint;
+  exception
+    when invalid_text_representation then
+      expected_size := null;
+  end;
+
+  if expected_bucket <>
+     'crm-whatsapp-media'
+     or expected_path is null then
+    raise exception
+      'Os metadados do upload estão incompletos.';
+  end if;
+
+  select
+    object.metadata
+  into object_metadata
+  from storage.objects as object
+  where object.bucket_id =
+        expected_bucket
+    and object.name =
+        expected_path
+  limit 1;
+
+  if not found then
+    raise exception
+      'O arquivo ainda não foi encontrado no armazenamento.';
+  end if;
+
+  begin
+    stored_size :=
+      nullif(
+        object_metadata ->> 'size',
+        ''
+      )::bigint;
+  exception
+    when invalid_text_representation then
+      stored_size := null;
+  end;
+
+  if expected_size is not null
+     and stored_size is not null
+     and expected_size <>
+         stored_size then
+    raise exception
+      'O tamanho armazenado não corresponde ao arquivo preparado.';
+  end if;
+
+  update public.messages
+  set
+    media_storage_path =
+      expected_path,
+    metadata =
+      (
+        coalesce(
+          metadata,
+          '{}'::jsonb
+        )
+        - 'media'
+      )
+      || pg_catalog.jsonb_build_object(
+        'media',
+        coalesce(
+          metadata -> 'media',
+          '{}'::jsonb
+        )
+        || pg_catalog.jsonb_build_object(
+          'upload_status',
+            'stored',
+          'stored_at',
+            now(),
+          'stored_size_bytes',
+            stored_size
+        )
+      )
+  where id =
+        target_message.id
+    and organization_id =
+        p_organization_id;
+
+  return pg_catalog.jsonb_build_object(
+    'finalized',
+      true,
+    'message_id',
+      target_message.id,
+    'conversation_id',
+      target_message.conversation_id,
+    'status',
+      'queued',
+    'storage_bucket',
+      expected_bucket,
+    'storage_path',
+      expected_path,
+    'size_bytes',
+      coalesce(
+        stored_size,
+        expected_size
+      )
+  );
+end;
+$function$
+"
+public,get_crm_whatsapp_window,"p_organization_id uuid, p_conversation_id uuid","CREATE OR REPLACE FUNCTION public.get_crm_whatsapp_window(p_organization_id uuid, p_conversation_id uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare
+  actor_id uuid := auth.uid();
+  target_conversation record;
+  last_inbound_at timestamptz;
+  window_expires_at timestamptz;
+  window_is_open boolean;
+  remaining_seconds bigint;
+begin
+  if actor_id is null then
+    raise exception
+      'É necessário estar autenticado para consultar a janela do WhatsApp.';
+  end if;
+
+  if not private.is_organization_member(
+    p_organization_id
+  ) then
+    raise exception
+      'O usuário não pertence à empresa informada.';
+  end if;
+
+  select
+    conversation.id,
+    conversation.channel,
+    conversation.status
+  into target_conversation
+  from public.conversations as conversation
+  where conversation.id =
+        p_conversation_id
+    and conversation.organization_id =
+        p_organization_id
+  limit 1;
+
+  if not found then
+    raise exception
+      'Conversa não encontrada.';
+  end if;
+
+  if target_conversation.channel <>
+     'whatsapp' then
+    return pg_catalog.jsonb_build_object(
+      'conversation_id',
+        p_conversation_id,
+      'channel',
+        target_conversation.channel,
+      'is_whatsapp',
+        false,
+      'is_open',
+        true,
+      'requires_template',
+        false,
+      'last_inbound_at',
+        null,
+      'expires_at',
+        null,
+      'remaining_seconds',
+        null
+    );
+  end if;
+
+  if not private.can_reply_conversation(
+    p_conversation_id
+  ) then
+    raise exception
+      'Você não possui permissão para responder esta conversa.';
+  end if;
+
+  select
+    max(
+      coalesce(
+        message.sent_at,
+        message.created_at
+      )
+    )
+  into last_inbound_at
+  from public.messages as message
+  where message.organization_id =
+        p_organization_id
+    and message.conversation_id =
+        p_conversation_id
+    and message.direction =
+        'inbound';
+
+  window_expires_at :=
+    case
+      when last_inbound_at is null
+        then null
+      else
+        last_inbound_at
+        + interval '24 hours'
+    end;
+
+  window_is_open :=
+    window_expires_at is not null
+    and now() < window_expires_at;
+
+  remaining_seconds :=
+    case
+      when window_is_open
+        then greatest(
+          0,
+          floor(
+            extract(
+              epoch from (
+                window_expires_at
+                - now()
+              )
+            )
+          )::bigint
+        )
+      else 0
+    end;
+
+  return pg_catalog.jsonb_build_object(
+    'conversation_id',
+      p_conversation_id,
+    'channel',
+      'whatsapp',
+    'is_whatsapp',
+      true,
+    'is_open',
+      window_is_open,
+    'requires_template',
+      not window_is_open,
+    'last_inbound_at',
+      last_inbound_at,
+    'expires_at',
+      window_expires_at,
+    'remaining_seconds',
+      remaining_seconds
+  );
+end;
+$function$
+"
+public,get_my_crm_context,,"CREATE OR REPLACE FUNCTION public.get_my_crm_context()
+ RETURNS jsonb
+ LANGUAGE sql
+ STABLE
+ SET search_path TO ''
+AS $function$
+  with current_profile as (
+    select
+      profile.id,
+      profile.email,
+      profile.full_name,
+      profile.avatar_url,
+      profile.is_platform_admin
+    from public.profiles as profile
+    where profile.id = (select auth.uid())
+  )
+
+  select jsonb_build_object(
+    'user',
+    jsonb_build_object(
+      'id', profile.id,
+      'email', profile.email,
+      'full_name', profile.full_name,
+      'avatar_url', profile.avatar_url,
+      'is_platform_admin', profile.is_platform_admin
+    ),
+
+    'memberships',
+    coalesce(
+      (
+        select jsonb_agg(
+          jsonb_build_object(
+            'organization',
+            jsonb_build_object(
+              'id', organization.id,
+              'name', organization.name,
+              'slug', organization.slug,
+              'status', organization.status,
+              'created_at', organization.created_at
+            ),
+
+            'branding',
+            jsonb_build_object(
+              'crm_name', branding.crm_name,
+              'logo_url', branding.logo_url,
+              'favicon_url', branding.favicon_url,
+              'login_background_url',
+                branding.login_background_url,
+              'primary_color', branding.primary_color,
+              'secondary_color', branding.secondary_color,
+              'accent_color', branding.accent_color,
+              'background_color', branding.background_color,
+              'font_family', branding.font_family
+            ),
+
+            'role',
+            jsonb_build_object(
+              'id', role.id,
+              'name', role.name,
+              'code', role.code,
+              'description', role.description
+            ),
+
+            'permissions',
+            coalesce(
+              (
+                select jsonb_agg(
+                  permission.code
+                  order by permission.code
+                )
+                from public.role_permissions
+                  as role_permission
+
+                join public.permissions as permission
+                  on permission.id =
+                     role_permission.permission_id
+
+                where role_permission.role_id =
+                      role.id
+              ),
+              '[]'::jsonb
+            )
+          )
+          order by organization.name
+        )
+
+        from public.organization_members as member
+
+        join public.organizations as organization
+          on organization.id =
+             member.organization_id
+
+        join public.roles as role
+          on role.id = member.role_id
+          and role.organization_id =
+              member.organization_id
+
+        left join public.organization_branding
+          as branding
+          on branding.organization_id =
+             organization.id
+
+        where member.user_id = profile.id
+          and member.status = 'active'
+          and organization.status = 'active'
+      ),
+      '[]'::jsonb
+    )
+  )
+
+  from current_profile as profile;
+$function$
+"
+public,handle_new_auth_user,,"CREATE OR REPLACE FUNCTION public.handle_new_auth_user()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+begin
+  insert into public.profiles (
+    id,
+    email,
+    full_name,
+    avatar_url
+  )
+  values (
+    new.id,
+    coalesce(new.email, ''),
+    coalesce(new.raw_user_meta_data ->> 'full_name', ''),
+    new.raw_user_meta_data ->> 'avatar_url'
+  )
+  on conflict (id) do nothing;
+
+  return new;
+end;
+$function$
+"
+public,handle_updated_auth_user,,"CREATE OR REPLACE FUNCTION public.handle_updated_auth_user()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+begin
+  update public.profiles
+  set
+    email = coalesce(new.email, profiles.email),
+
+    full_name = case
+      when coalesce(new.raw_user_meta_data ->> 'full_name', '') <> ''
+      then new.raw_user_meta_data ->> 'full_name'
+      else profiles.full_name
+    end,
+
+    avatar_url = coalesce(
+      new.raw_user_meta_data ->> 'avatar_url',
+      profiles.avatar_url
+    ),
+
+    updated_at = now()
+
+  where id = new.id;
+
+  return new;
+end;
+$function$
+"
+public,ingest_crm_whatsapp_message,"p_organization_id uuid, p_external_account_id text, p_external_contact_id text, p_external_message_id text, p_contact_name text, p_message_type text, p_body text, p_sent_at timestamp with time zone, p_metadata jsonb","CREATE OR REPLACE FUNCTION public.ingest_crm_whatsapp_message(p_organization_id uuid, p_external_account_id text, p_external_contact_id text, p_external_message_id text, p_contact_name text DEFAULT NULL::text, p_message_type text DEFAULT 'text'::text, p_body text DEFAULT NULL::text, p_sent_at timestamp with time zone DEFAULT now(), p_metadata jsonb DEFAULT '{}'::jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare
+  normalized_phone text;
+  incoming_phone_aliases text[];
+  safe_message_type text;
+  safe_metadata jsonb;
+  contact_display_name text;
+
+  target_contact record;
+  target_lead record;
+  target_conversation record;
+  existing_message record;
+
+  target_pipeline_id uuid;
+  target_stage_id uuid;
+  target_source_id uuid;
+
+  new_conversation_id uuid;
+  new_message_id uuid;
+
+  contact_was_created boolean := false;
+  lead_was_created boolean := false;
+begin
+  -- ==========================================================
+  -- VALIDAÇÕES INICIAIS
+  -- ==========================================================
+
+  if not exists (
+    select 1
+    from public.organizations as organization
+    where organization.id = p_organization_id
+      and organization.status = 'active'
+  ) then
+    raise exception
+      'A empresa informada não existe ou está inativa.';
+  end if;
+
+  if nullif(
+    pg_catalog.btrim(
+      p_external_message_id
+    ),
+    ''
+  ) is null then
+    raise exception
+      'O identificador externo da mensagem é obrigatório.';
+  end if;
+
+  normalized_phone :=
+    public.normalize_phone(
+      p_external_contact_id
+    );
+
+  incoming_phone_aliases :=
+    public.crm_phone_aliases(
+      p_external_contact_id
+    );
+
+  if normalized_phone is null
+     or coalesce(
+       pg_catalog.array_length(
+         incoming_phone_aliases,
+         1
+       ),
+       0
+     ) = 0 then
+    raise exception
+      'O telefone de origem da mensagem é inválido.';
+  end if;
+
+  contact_display_name :=
+    coalesce(
+      nullif(
+        pg_catalog.btrim(
+          p_contact_name
+        ),
+        ''
+      ),
+      normalized_phone
+    );
+
+  safe_message_type :=
+    case
+      when p_message_type in (
+        'text',
+        'image',
+        'audio',
+        'video',
+        'document',
+        'location',
+        'contact',
+        'interactive'
+      )
+      then p_message_type
+      else 'text'
+    end;
+
+  safe_metadata :=
+    case
+      when pg_catalog.jsonb_typeof(
+        coalesce(
+          p_metadata,
+          '{}'::jsonb
+        )
+      ) = 'object'
+      then coalesce(
+        p_metadata,
+        '{}'::jsonb
+      )
+      else pg_catalog.jsonb_build_object(
+        'raw_metadata',
+        p_metadata
+      )
+    end;
+
+  -- ==========================================================
+  -- DEDUPLICAÇÃO DA MENSAGEM
+  -- ==========================================================
+
+  select
+    message.id,
+    message.conversation_id,
+    message.status
+  into existing_message
+  from public.messages as message
+  where message.organization_id =
+        p_organization_id
+    and message.external_message_id =
+        pg_catalog.btrim(
+          p_external_message_id
+        )
+  limit 1;
+
+  if found then
+    return pg_catalog.jsonb_build_object(
+      'received', true,
+      'duplicate', true,
+      'message_id', existing_message.id,
+      'conversation_id',
+        existing_message.conversation_id,
+      'status', existing_message.status
+    );
+  end if;
+
+  -- ==========================================================
+  -- LOCALIZAR CONTATO POR TELEFONE EQUIVALENTE
+  -- ==========================================================
+
+  select
+    contact.id,
+    contact.full_name,
+    contact.phone
+  into target_contact
+  from public.contacts as contact
+  where contact.organization_id =
+        p_organization_id
+    and public.crm_phone_aliases(
+          coalesce(
+            nullif(
+              contact.phone_normalized,
+              ''
+            ),
+            contact.phone
+          )
+        )
+        && incoming_phone_aliases
+  order by
+    case
+      when contact.phone_normalized =
+           normalized_phone
+        then 0
+      else 1
+    end,
+    contact.updated_at desc
+  limit 1;
+
+  -- ==========================================================
+  -- CRIAR CONTATO QUANDO O NÚMERO É NOVO
+  -- ==========================================================
+
+  if not found then
+    insert into public.contacts (
+      organization_id,
+      full_name,
+      phone,
+      notes
+    )
+    values (
+      p_organization_id,
+      contact_display_name,
+      normalized_phone,
+      'Contato criado automaticamente por mensagem recebida no WhatsApp.'
+    )
+    returning
+      id,
+      full_name,
+      phone
+    into target_contact;
+
+    contact_was_created := true;
+  else
+    -- Atualiza o nome somente quando o cadastro ainda é genérico.
+    if nullif(
+      pg_catalog.btrim(
+        p_contact_name
+      ),
+      ''
+    ) is not null
+       and (
+         nullif(
+           pg_catalog.btrim(
+             target_contact.full_name
+           ),
+           ''
+         ) is null
+         or target_contact.full_name =
+            target_contact.phone
+         or target_contact.full_name =
+            normalized_phone
+       ) then
+
+      update public.contacts
+      set
+        full_name =
+          pg_catalog.btrim(
+            p_contact_name
+          ),
+        updated_at = now()
+      where id = target_contact.id
+        and organization_id =
+            p_organization_id;
+
+      target_contact.full_name :=
+        pg_catalog.btrim(
+          p_contact_name
+        );
+    end if;
+  end if;
+
+  -- ==========================================================
+  -- LOCALIZAR LEAD EXISTENTE
+  -- ==========================================================
+
+  select
+    lead.id,
+    lead.assigned_to,
+    lead.priority
+  into target_lead
+  from public.leads as lead
+  where lead.organization_id =
+        p_organization_id
+    and lead.contact_id =
+        target_contact.id
+  order by
+    lead.updated_at desc,
+    lead.created_at desc
+  limit 1;
+
+  -- ==========================================================
+  -- CRIAR LEAD QUANDO O CONTATO AINDA NÃO POSSUI UM
+  -- ==========================================================
+
+  if not found then
+    select pipeline.id
+    into target_pipeline_id
+    from public.pipelines as pipeline
+    where pipeline.organization_id =
+          p_organization_id
+      and pipeline.status = 'active'
+    order by
+      pipeline.created_at,
+      pipeline.name
+    limit 1;
+
+    if target_pipeline_id is null then
+      raise exception
+        'Não existe um funil ativo para receber novos atendimentos do WhatsApp.';
+    end if;
+
+    select stage.id
+    into target_stage_id
+    from public.pipeline_stages as stage
+    where stage.organization_id =
+          p_organization_id
+      and stage.pipeline_id =
+          target_pipeline_id
+      and stage.is_active = true
+      and stage.category not in (
+        'won',
+        'lost'
+      )
+    order by
+      case
+        when stage.category = 'open'
+          then 0
+        else 1
+      end,
+      stage.position
+    limit 1;
+
+    if target_stage_id is null then
+      raise exception
+        'O funil ativo não possui uma etapa aberta para receber o novo lead.';
+    end if;
+
+    select source.id
+    into target_source_id
+    from public.lead_sources as source
+    where source.organization_id =
+          p_organization_id
+      and source.is_active = true
+    order by
+      case source.code
+        when 'whatsapp' then 0
+        when 'manual' then 1
+        else 2
+      end,
+      source.name
+    limit 1;
+
+    if target_source_id is null then
+      raise exception
+        'Não existe uma origem ativa para cadastrar o novo lead do WhatsApp.';
+    end if;
+
+    insert into public.leads (
+      organization_id,
+      contact_id,
+      pipeline_id,
+      stage_id,
+      source_id,
+      title,
+      assigned_to,
+      priority,
+      temperature,
+      score,
+      estimated_value,
+      raw_payload,
+      created_by,
+      updated_by,
+      first_contact_at,
+      last_activity_at
+    )
+    values (
+      p_organization_id,
+      target_contact.id,
+      target_pipeline_id,
+      target_stage_id,
+      target_source_id,
+      coalesce(
+        nullif(
+          pg_catalog.btrim(
+            target_contact.full_name
+          ),
+          ''
+        ),
+        normalized_phone
+      ),
+      null,
+      'medium',
+      'warm',
+      20,
+      null,
+      safe_metadata
+        || pg_catalog.jsonb_build_object(
+          'source',
+          'whatsapp_inbound',
+          'created_automatically',
+          true,
+          'external_contact_id',
+          normalized_phone
+        ),
+      null,
+      null,
+      coalesce(
+        p_sent_at,
+        now()
+      ),
+      coalesce(
+        p_sent_at,
+        now()
+      )
+    )
+    returning
+      id,
+      assigned_to,
+      priority
+    into target_lead;
+
+    lead_was_created := true;
+  end if;
+
+  -- ==========================================================
+  -- LOCALIZAR OU CRIAR CONVERSA
+  -- ==========================================================
+
+  select
+    conversation.id,
+    conversation.status,
+    conversation.assigned_to
+  into target_conversation
+  from public.conversations as conversation
+  where conversation.organization_id =
+        p_organization_id
+    and conversation.channel =
+        'whatsapp'
+    and (
+      conversation.lead_id =
+        target_lead.id
+      or public.crm_phone_aliases(
+           conversation.external_contact_id
+         )
+         && incoming_phone_aliases
+    )
+  order by
+    case
+      when conversation.status <>
+           'archived'
+        then 0
+      else 1
+    end,
+    conversation.updated_at desc
+  limit 1
+  for update;
+
+  if found then
+    new_conversation_id :=
+      target_conversation.id;
+
+    update public.conversations
+    set
+      lead_id =
+        target_lead.id,
+      contact_id =
+        target_contact.id,
+      external_account_id =
+        coalesce(
+          nullif(
+            pg_catalog.btrim(
+              p_external_account_id
+            ),
+            ''
+          ),
+          external_account_id
+        ),
+      external_contact_id =
+        normalized_phone,
+      status =
+        case
+          when status in (
+            'resolved',
+            'archived'
+          )
+          then 'open'
+          else status
+        end,
+      updated_at = now()
+    where id = new_conversation_id
+      and organization_id =
+          p_organization_id;
+  else
+    insert into public.conversations (
+      organization_id,
+      lead_id,
+      contact_id,
+      channel,
+      external_account_id,
+      external_contact_id,
+      subject,
+      assigned_to,
+      status,
+      priority,
+      created_by,
+      updated_by
+    )
+    values (
+      p_organization_id,
+      target_lead.id,
+      target_contact.id,
+      'whatsapp',
+      nullif(
+        pg_catalog.btrim(
+          p_external_account_id
+        ),
+        ''
+      ),
+      normalized_phone,
+      coalesce(
+        nullif(
+          pg_catalog.btrim(
+            p_contact_name
+          ),
+          ''
+        ),
+        target_contact.full_name,
+        normalized_phone
+      ),
+      target_lead.assigned_to,
+      'open',
+      coalesce(
+        target_lead.priority,
+        'medium'
+      ),
+      null,
+      null
+    )
+    returning id
+    into new_conversation_id;
+  end if;
+
+  -- ==========================================================
+  -- REGISTRAR MENSAGEM RECEBIDA
+  -- ==========================================================
+
+  insert into public.messages (
+    organization_id,
+    conversation_id,
+    direction,
+    message_type,
+    body,
+    external_message_id,
+    sender_user_id,
+    sender_name_snapshot,
+    sender_role_snapshot,
+    status,
+    metadata,
+    sent_at
+  )
+  values (
+    p_organization_id,
+    new_conversation_id,
+    'inbound',
+    safe_message_type,
+    nullif(
+      pg_catalog.btrim(
+        p_body
+      ),
+      ''
+    ),
+    pg_catalog.btrim(
+      p_external_message_id
+    ),
+    null,
+    coalesce(
+      nullif(
+        pg_catalog.btrim(
+          p_contact_name
+        ),
+        ''
+      ),
+      target_contact.full_name,
+      normalized_phone
+    ),
+    'contact',
+    'received',
+    safe_metadata
+      || pg_catalog.jsonb_build_object(
+        'source',
+        'whatsapp_cloud_api',
+        'external_account_id',
+        p_external_account_id,
+        'external_contact_id',
+        normalized_phone,
+        'phone_aliases',
+        incoming_phone_aliases,
+        'contact_created',
+        contact_was_created,
+        'lead_created',
+        lead_was_created
+      ),
+    coalesce(
+      p_sent_at,
+      now()
+    )
+  )
+  returning id
+  into new_message_id;
+
+  return pg_catalog.jsonb_build_object(
+    'received', true,
+    'duplicate', false,
+    'message_id', new_message_id,
+    'conversation_id',
+      new_conversation_id,
+    'lead_id', target_lead.id,
+    'contact_id',
+      target_contact.id,
+    'status', 'received',
+    'matched_phone',
+      target_contact.phone,
+    'contact_created',
+      contact_was_created,
+    'lead_created',
+      lead_was_created
+  );
+end;
+$function$
+"
+public,mark_crm_conversation_read,"p_organization_id uuid, p_conversation_id uuid","CREATE OR REPLACE FUNCTION public.mark_crm_conversation_read(p_organization_id uuid, p_conversation_id uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare
+  actor_id uuid := auth.uid();
+  target_last_read_at timestamptz;
+begin
+  if actor_id is null then
+    raise exception
+      'É necessário estar autenticado para atualizar a conversa.';
+  end if;
+
+  if not private.is_organization_member(
+    p_organization_id
+  ) then
+    raise exception
+      'O usuário não pertence à empresa informada.';
+  end if;
+
+  if not exists (
+    select 1
+    from public.conversations as conversation
+    where conversation.id = p_conversation_id
+      and conversation.organization_id =
+          p_organization_id
+  ) then
+    raise exception
+      'Conversa não encontrada.';
+  end if;
+
+  if not private.can_view_conversation(
+    p_conversation_id
+  ) then
+    raise exception
+      'Você não possui acesso a esta conversa.';
+  end if;
+
+  select coalesce(
+    max(message.sent_at),
+    now()
+  )
+  into target_last_read_at
+  from public.messages as message
+  where message.organization_id =
+        p_organization_id
+    and message.conversation_id =
+        p_conversation_id;
+
+  insert into public.conversation_user_state (
+    organization_id,
+    conversation_id,
+    user_id,
+    last_read_at
+  )
+  values (
+    p_organization_id,
+    p_conversation_id,
+    actor_id,
+    target_last_read_at
+  )
+  on conflict (
+    conversation_id,
+    user_id
+  )
+  do update
+  set
+    last_read_at = greatest(
+      coalesce(
+        public.conversation_user_state.last_read_at,
+        '-infinity'::timestamptz
+      ),
+      excluded.last_read_at
+    ),
+    updated_at = now();
+
+  return jsonb_build_object(
+    'conversation_id',
+    p_conversation_id,
+    'read', true,
+    'last_read_at',
+    target_last_read_at
+  );
+end;
+$function$
+"
+public,mark_crm_notifications_read,"p_organization_id uuid, p_notification_id uuid","CREATE OR REPLACE FUNCTION public.mark_crm_notifications_read(p_organization_id uuid, p_notification_id uuid DEFAULT NULL::uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare
+  actor_id uuid := auth.uid();
+  affected_rows integer := 0;
+begin
+  if actor_id is null then
+    raise exception
+      'É necessário estar autenticado para atualizar notificações.';
+  end if;
+
+  if not private.is_organization_member(
+    p_organization_id
+  ) then
+    raise exception
+      'O usuário não pertence à empresa informada.';
+  end if;
+
+  if not private.has_permission(
+    p_organization_id,
+    'notifications.update'
+  ) then
+    raise exception
+      'Você não possui permissão para atualizar notificações.';
+  end if;
+
+  update public.notifications
+  set read_at = coalesce(read_at, now())
+  where organization_id = p_organization_id
+    and user_id = actor_id
+    and (
+      p_notification_id is null
+      or id = p_notification_id
+    );
+
+  get diagnostics affected_rows = row_count;
+
+  if p_notification_id is not null
+     and affected_rows = 0 then
+    raise exception
+      'Notificação não encontrada ou indisponível para este usuário.';
+  end if;
+
+  return jsonb_build_object(
+    'updated', true,
+    'notifications_updated', affected_rows,
+    'notification_id', p_notification_id
+  );
+end;
+$function$
+"
+public,move_crm_lead,"p_organization_id uuid, p_lead_id uuid, p_stage_id uuid","CREATE OR REPLACE FUNCTION public.move_crm_lead(p_organization_id uuid, p_lead_id uuid, p_stage_id uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare
+  actor_id uuid;
+  current_lead record;
+  target_stage record;
+begin
+  actor_id := auth.uid();
+
+  if actor_id is null then
+    raise exception
+      'É necessário estar autenticado para movimentar leads.';
+  end if;
+
+  if not private.is_organization_member(
+    p_organization_id
+  ) then
+    raise exception
+      'O usuário não pertence à empresa informada.';
+  end if;
+
+  if not (
+    private.is_organization_admin(
+      p_organization_id
+    )
+    or private.has_permission(
+      p_organization_id,
+      'leads.update'
+    )
+    or private.has_permission(
+      p_organization_id,
+      'leads.move'
+    )
+  ) then
+    raise exception
+      'Você não possui permissão para movimentar leads.';
+  end if;
+
+  select
+    lead.id,
+    lead.organization_id,
+    lead.pipeline_id,
+    lead.stage_id,
+    lead.assigned_to
+  into current_lead
+  from public.leads as lead
+  where lead.id = p_lead_id
+    and lead.organization_id =
+        p_organization_id
+  for update;
+
+  if not found then
+    raise exception
+      'Lead não encontrado.';
+  end if;
+
+  if not private.user_can_access_pipeline(
+    actor_id,
+    current_lead.pipeline_id
+  ) then
+    raise exception
+      'Você não possui acesso ao funil deste lead.';
+  end if;
+
+  select
+    stage.id,
+    stage.pipeline_id,
+    stage.organization_id,
+    stage.name
+  into target_stage
+  from public.pipeline_stages as stage
+  where stage.id = p_stage_id
+    and stage.organization_id =
+        p_organization_id
+    and stage.pipeline_id =
+        current_lead.pipeline_id
+    and stage.is_active = true;
+
+  if not found then
+    raise exception
+      'A etapa selecionada não pertence ao funil do lead ou está inativa.';
+  end if;
+
+  if not private.can_operate_pipeline_stage(
+    p_stage_id
+  ) then
+    raise exception
+      'Você não possui acesso operacional à etapa selecionada.';
+  end if;
+
+  if current_lead.stage_id = p_stage_id then
+    return jsonb_build_object(
+      'lead_id',
+      p_lead_id,
+      'stage_id',
+      p_stage_id,
+      'moved',
+      false,
+      'reason',
+      'same_stage'
+    );
+  end if;
+
+  update public.leads
+  set
+    stage_id = p_stage_id,
+    updated_by = actor_id,
+    updated_at = now(),
+    last_activity_at = now()
+  where id = p_lead_id
+    and organization_id =
+        p_organization_id;
+
+  return jsonb_build_object(
+    'lead_id',
+    p_lead_id,
+    'previous_stage_id',
+    current_lead.stage_id,
+    'stage_id',
+    p_stage_id,
+    'stage_name',
+    target_stage.name,
+    'moved',
+    true
+  );
+end;
+$function$
+"
+public,normalize_email,input_value text,"CREATE OR REPLACE FUNCTION public.normalize_email(input_value text)
+ RETURNS text
+ LANGUAGE sql
+ IMMUTABLE
+ SET search_path TO ''
+AS $function$
+  select nullif(
+    pg_catalog.lower(
+      pg_catalog.btrim(input_value)
+    ),
+    ''
+  );
+$function$
+"
+public,normalize_phone,input_value text,"CREATE OR REPLACE FUNCTION public.normalize_phone(input_value text)
+ RETURNS text
+ LANGUAGE plpgsql
+ IMMUTABLE
+ SET search_path TO ''
+AS $function$
+declare
+  digits text;
+begin
+  digits := pg_catalog.regexp_replace(
+    coalesce(input_value, ''),
+    '[^0-9]',
+    '',
+    'g'
+  );
+
+  if digits = '' then
+    return null;
+  end if;
+
+  if pg_catalog.length(digits) in (10, 11) then
+    return '55' || digits;
+  end if;
+
+  return digits;
+end;
+$function$
+"
+public,open_crm_whatsapp_conversation,"p_organization_id uuid, p_lead_id uuid","CREATE OR REPLACE FUNCTION public.open_crm_whatsapp_conversation(p_organization_id uuid, p_lead_id uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare
+  actor_id uuid := auth.uid();
+  target_lead record;
+  existing_conversation record;
+  new_conversation_id uuid;
+  normalized_phone text;
+begin
+  if actor_id is null then
+    raise exception
+      'É necessário estar autenticado para iniciar uma conversa.';
+  end if;
+
+  if not private.is_organization_member(
+    p_organization_id
+  ) then
+    raise exception
+      'O usuário não pertence à empresa informada.';
+  end if;
+
+  if not private.has_permission(
+    p_organization_id,
+    'conversations.create'
+  ) then
+    raise exception
+      'Você não possui permissão para iniciar conversas.';
+  end if;
+
+  select
+    lead.id,
+    lead.organization_id,
+    lead.contact_id,
+    lead.pipeline_id,
+    lead.priority,
+    contact.full_name,
+    contact.phone
+  into target_lead
+  from public.leads as lead
+  join public.contacts as contact
+    on contact.id = lead.contact_id
+   and contact.organization_id =
+       lead.organization_id
+  where lead.id = p_lead_id
+    and lead.organization_id =
+        p_organization_id
+  for update of lead;
+
+  if not found then
+    raise exception
+      'Lead não encontrado.';
+  end if;
+
+  if not private.can_view_lead(
+    p_lead_id
+  ) then
+    raise exception
+      'Este lead não está no seu escopo de acesso.';
+  end if;
+
+  normalized_phone :=
+    public.normalize_phone(
+      target_lead.phone
+    );
+
+  if normalized_phone is null then
+    raise exception
+      'O lead não possui um telefone válido para iniciar o WhatsApp.';
+  end if;
+
+  select
+    conversation.id,
+    conversation.status,
+    conversation.assigned_to
+  into existing_conversation
+  from public.conversations as conversation
+  where conversation.organization_id =
+        p_organization_id
+    and conversation.lead_id =
+        p_lead_id
+    and conversation.channel =
+        'whatsapp'
+  order by
+    case
+      when conversation.status <> 'archived'
+        then 0
+      else 1
+    end,
+    conversation.updated_at desc,
+    conversation.created_at desc
+  limit 1
+  for update;
+
+  if found then
+    if not private.can_view_conversation(
+      existing_conversation.id
+    ) then
+      raise exception
+        'Já existe uma conversa deste lead atribuída a outro usuário.';
+    end if;
+
+    if existing_conversation.status = 'archived' then
+      update public.conversations
+      set
+        status = 'open',
+        updated_by = actor_id,
+        updated_at = now()
+      where id = existing_conversation.id
+        and organization_id =
+            p_organization_id;
+    end if;
+
+    return jsonb_build_object(
+      'conversation_id',
+      existing_conversation.id,
+      'lead_id',
+      p_lead_id,
+      'created',
+      false,
+      'reopened',
+      existing_conversation.status = 'archived'
+    );
+  end if;
+
+  insert into public.conversations (
+    organization_id,
+    lead_id,
+    contact_id,
+    channel,
+    external_contact_id,
+    subject,
+    assigned_to,
+    status,
+    priority,
+    created_by,
+    updated_by
+  )
+  values (
+    p_organization_id,
+    p_lead_id,
+    target_lead.contact_id,
+    'whatsapp',
+    normalized_phone,
+    target_lead.full_name,
+    actor_id,
+    'open',
+    coalesce(
+      target_lead.priority,
+      'medium'
+    ),
+    actor_id,
+    actor_id
+  )
+  returning id
+  into new_conversation_id;
+
+  insert into public.conversation_user_state (
+    organization_id,
+    conversation_id,
+    user_id,
+    last_read_at
+  )
+  values (
+    p_organization_id,
+    new_conversation_id,
+    actor_id,
+    now()
+  )
+  on conflict (
+    conversation_id,
+    user_id
+  )
+  do update
+  set
+    last_read_at = excluded.last_read_at,
+    updated_at = now();
+
+  return jsonb_build_object(
+    'conversation_id',
+    new_conversation_id,
+    'lead_id',
+    p_lead_id,
+    'created',
+    true,
+    'reopened',
+    false
+  );
+end;
+$function$
+"
+public,queue_crm_whatsapp_media,"p_organization_id uuid, p_conversation_id uuid, p_message_id uuid, p_message_type text, p_body text, p_mime_type text, p_file_name text, p_size_bytes bigint, p_storage_path text","CREATE OR REPLACE FUNCTION public.queue_crm_whatsapp_media(p_organization_id uuid, p_conversation_id uuid, p_message_id uuid, p_message_type text, p_body text DEFAULT NULL::text, p_mime_type text DEFAULT NULL::text, p_file_name text DEFAULT NULL::text, p_size_bytes bigint DEFAULT NULL::bigint, p_storage_path text DEFAULT NULL::text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare
+  actor_id uuid := auth.uid();
+  current_conversation record;
+
+  safe_type text;
+  safe_body text;
+  safe_mime_type text;
+  safe_file_name text;
+  safe_storage_path text;
+
+  max_size_bytes bigint;
+  sender_name text;
+  sender_role text;
+  new_message_at timestamptz;
+
+  last_inbound_at timestamptz;
+  window_expires_at timestamptz;
+begin
+  if actor_id is null then
+    raise exception
+      'É necessário estar autenticado para preparar mídias.';
+  end if;
+
+  if not private.is_organization_member(
+    p_organization_id
+  ) then
+    raise exception
+      'O usuário não pertence à empresa informada.';
+  end if;
+
+  if p_message_id is null then
+    raise exception
+      'O identificador da mensagem é obrigatório.';
+  end if;
+
+  safe_type :=
+    pg_catalog.lower(
+      pg_catalog.btrim(
+        coalesce(
+          p_message_type,
+          ''
+        )
+      )
+    );
+
+  if safe_type not in (
+    'image',
+    'audio',
+    'video',
+    'document'
+  ) then
+    raise exception
+      'O tipo de mídia informado não é aceito.';
+  end if;
+
+  safe_mime_type :=
+    pg_catalog.lower(
+      pg_catalog.btrim(
+        coalesce(
+          p_mime_type,
+          ''
+        )
+      )
+    );
+
+  safe_file_name :=
+    pg_catalog.btrim(
+      coalesce(
+        p_file_name,
+        ''
+      )
+    );
+
+  safe_storage_path :=
+    pg_catalog.btrim(
+      coalesce(
+        p_storage_path,
+        ''
+      )
+    );
+
+  if safe_mime_type = ''
+     or pg_catalog.char_length(
+       safe_mime_type
+     ) > 180 then
+    raise exception
+      'O tipo MIME do arquivo é inválido.';
+  end if;
+
+  if safe_file_name = ''
+     or pg_catalog.char_length(
+       safe_file_name
+     ) > 180 then
+    raise exception
+      'O nome do arquivo é inválido.';
+  end if;
+
+  if safe_storage_path = ''
+     or pg_catalog.char_length(
+       safe_storage_path
+     ) > 900 then
+    raise exception
+      'O caminho reservado para o arquivo é inválido.';
+  end if;
+
+  if safe_storage_path not like (
+    p_organization_id::text
+    || '/'
+    || p_conversation_id::text
+    || '/'
+    || p_message_id::text
+    || '/%'
+  ) then
+    raise exception
+      'O caminho reservado não pertence à mensagem informada.';
+  end if;
+
+  if p_size_bytes is null
+     or p_size_bytes <= 0 then
+    raise exception
+      'O tamanho do arquivo é inválido.';
+  end if;
+
+  if safe_type = 'image' then
+    max_size_bytes := 5 * 1024 * 1024;
+
+    if safe_mime_type not in (
+      'image/jpeg',
+      'image/png',
+      'image/webp'
+    ) then
+      raise exception
+        'Este formato de imagem não é aceito pelo WhatsApp.';
+    end if;
+  elsif safe_type = 'audio' then
+    max_size_bytes := 16 * 1024 * 1024;
+
+    if safe_mime_type not in (
+      'audio/aac',
+      'audio/amr',
+      'audio/mpeg',
+      'audio/mp4',
+      'audio/ogg'
+    ) then
+      raise exception
+        'Este formato de áudio não é aceito pelo WhatsApp.';
+    end if;
+  elsif safe_type = 'video' then
+    max_size_bytes := 16 * 1024 * 1024;
+
+    if safe_mime_type not in (
+      'video/mp4',
+      'video/3gpp'
+    ) then
+      raise exception
+        'Este formato de vídeo não é aceito pelo WhatsApp.';
+    end if;
+  else
+    -- Limite inicial deliberadamente conservador.
+    -- Pode ser ampliado em uma etapa futura com upload resumível.
+    max_size_bytes := 20 * 1024 * 1024;
+
+    if safe_mime_type not in (
+      'text/plain',
+      'application/pdf',
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/vnd.ms-powerpoint',
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+    ) then
+      raise exception
+        'Este formato de documento não é aceito nesta etapa.';
+    end if;
+  end if;
+
+  if p_size_bytes > max_size_bytes then
+    raise exception
+      'O arquivo excede o limite permitido para este tipo de mídia.';
+  end if;
+
+  safe_body :=
+    nullif(
+      pg_catalog.btrim(
+        coalesce(
+          p_body,
+          ''
+        )
+      ),
+      ''
+    );
+
+  if safe_body is not null
+     and pg_catalog.char_length(
+       safe_body
+     ) > 1024 then
+    raise exception
+      'A legenda deve possuir no máximo 1024 caracteres.';
+  end if;
+
+  if safe_type = 'audio'
+     and safe_body is not null then
+    raise exception
+      'Áudios não aceitam legenda nesta etapa.';
+  end if;
+
+  select
+    conversation.id,
+    conversation.status,
+    conversation.assigned_to,
+    conversation.channel
+  into current_conversation
+  from public.conversations as conversation
+  where conversation.id =
+        p_conversation_id
+    and conversation.organization_id =
+        p_organization_id
+  for update;
+
+  if not found then
+    raise exception
+      'Conversa não encontrada.';
+  end if;
+
+  if current_conversation.channel <>
+     'whatsapp' then
+    raise exception
+      'A conversa não utiliza o canal WhatsApp.';
+  end if;
+
+  if not private.can_reply_conversation(
+    p_conversation_id
+  ) then
+    raise exception
+      'Você não possui permissão para responder esta conversa.';
+  end if;
+
+  if current_conversation.status =
+     'archived' then
+    raise exception
+      'Uma conversa arquivada não pode receber novas mensagens.';
+  end if;
+
+  select
+    max(
+      coalesce(
+        message.sent_at,
+        message.created_at
+      )
+    )
+  into last_inbound_at
+  from public.messages as message
+  where message.organization_id =
+        p_organization_id
+    and message.conversation_id =
+        p_conversation_id
+    and message.direction =
+        'inbound';
+
+  window_expires_at :=
+    case
+      when last_inbound_at is null
+        then null
+      else
+        last_inbound_at
+        + interval '24 hours'
+    end;
+
+  if window_expires_at is null
+     or now() >= window_expires_at then
+    raise exception
+      'A janela de atendimento de 24 horas está encerrada. Envie um template aprovado para iniciar ou retomar a conversa.';
+  end if;
+
+  select
+    coalesce(
+      profile.full_name,
+      profile.email,
+      'Usuário'
+    ),
+    coalesce(
+      role.name,
+      role.code,
+      'Usuário'
+    )
+  into
+    sender_name,
+    sender_role
+  from public.profiles as profile
+  join public.organization_members as member
+    on member.user_id =
+       profile.id
+   and member.organization_id =
+       p_organization_id
+   and member.status =
+       'active'
+  left join public.roles as role
+    on role.id =
+       member.role_id
+  where profile.id =
+        actor_id
+  limit 1;
+
+  if sender_name is null then
+    raise exception
+      'O perfil do remetente não está disponível nesta empresa.';
+  end if;
+
+  if current_conversation.status =
+     'resolved' then
+    update public.conversations
+    set
+      status = 'open',
+      updated_by = actor_id,
+      updated_at = now()
+    where id =
+          p_conversation_id
+      and organization_id =
+          p_organization_id;
+  end if;
+
+  insert into public.messages (
+    id,
+    organization_id,
+    conversation_id,
+    direction,
+    message_type,
+    body,
+    sender_user_id,
+    sender_name_snapshot,
+    sender_role_snapshot,
+    status,
+    media_storage_path,
+    mime_type,
+    file_name,
+    metadata,
+    sent_at
+  )
+  values (
+    p_message_id,
+    p_organization_id,
+    p_conversation_id,
+    'outbound',
+    safe_type,
+    coalesce(
+      safe_body,
+      case safe_type
+        when 'image' then
+          'Imagem enviada'
+        when 'audio' then
+          'Áudio enviado'
+        when 'video' then
+          'Vídeo enviado'
+        else
+          'Documento enviado'
+      end
+    ),
+    actor_id,
+    sender_name,
+    sender_role,
+    'queued',
+    safe_storage_path,
+    safe_mime_type,
+    safe_file_name,
+    pg_catalog.jsonb_build_object(
+      'source',
+        'crm',
+      'delivery_mode',
+        'outbound_media_queue',
+      'whatsapp_window_checked_at',
+        now(),
+      'whatsapp_window_expires_at',
+        window_expires_at,
+      'media',
+        pg_catalog.jsonb_build_object(
+          'direction',
+            'outbound',
+          'upload_status',
+            'awaiting_upload',
+          'storage_bucket',
+            'crm-whatsapp-media',
+          'storage_path',
+            safe_storage_path,
+          'mime_type',
+            safe_mime_type,
+          'file_name',
+            safe_file_name,
+          'size_bytes',
+            p_size_bytes
+        )
+    ),
+    now()
+  )
+  returning
+    sent_at
+  into
+    new_message_at;
+
+  return pg_catalog.jsonb_build_object(
+    'message_id',
+      p_message_id,
+    'conversation_id',
+      p_conversation_id,
+    'message_type',
+      safe_type,
+    'queued',
+      true,
+    'status',
+      'queued',
+    'storage_bucket',
+      'crm-whatsapp-media',
+    'storage_path',
+      safe_storage_path,
+    'mime_type',
+      safe_mime_type,
+    'file_name',
+      safe_file_name,
+    'size_bytes',
+      p_size_bytes,
+    'sent_at',
+      new_message_at,
+    'whatsapp_window_expires_at',
+      window_expires_at
+  );
+end;
+$function$
+"
+public,rls_auto_enable,,"CREATE OR REPLACE FUNCTION public.rls_auto_enable()
+ RETURNS event_trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'pg_catalog'
+AS $function$
+DECLARE
+  cmd record;
+BEGIN
+  FOR cmd IN
+    SELECT *
+    FROM pg_event_trigger_ddl_commands()
+    WHERE command_tag IN ('CREATE TABLE', 'CREATE TABLE AS', 'SELECT INTO')
+      AND object_type IN ('table','partitioned table')
+  LOOP
+     IF cmd.schema_name IS NOT NULL AND cmd.schema_name IN ('public') AND cmd.schema_name NOT IN ('pg_catalog','information_schema') AND cmd.schema_name NOT LIKE 'pg_toast%' AND cmd.schema_name NOT LIKE 'pg_temp%' THEN
+      BEGIN
+        EXECUTE format('alter table if exists %s enable row level security', cmd.object_identity);
+        RAISE LOG 'rls_auto_enable: enabled RLS on %', cmd.object_identity;
+      EXCEPTION
+        WHEN OTHERS THEN
+          RAISE LOG 'rls_auto_enable: failed to enable RLS on %', cmd.object_identity;
+      END;
+     ELSE
+        RAISE LOG 'rls_auto_enable: skip % (either system schema or not in enforced list: %.)', cmd.object_identity, cmd.schema_name;
+     END IF;
+  END LOOP;
+END;
+$function$
+"
+public,send_crm_message_local,"p_organization_id uuid, p_conversation_id uuid, p_body text","CREATE OR REPLACE FUNCTION public.send_crm_message_local(p_organization_id uuid, p_conversation_id uuid, p_body text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare
+  actor_id uuid := auth.uid();
+  current_conversation record;
+  sender_name text;
+  sender_role text;
+  new_message_id uuid;
+  new_message_at timestamptz;
+
+  last_inbound_at timestamptz;
+  window_expires_at timestamptz;
+begin
+  if actor_id is null then
+    raise exception
+      'É necessário estar autenticado para enviar mensagens.';
+  end if;
+
+  if not private.is_organization_member(
+    p_organization_id
+  ) then
+    raise exception
+      'O usuário não pertence à empresa informada.';
+  end if;
+
+  select
+    conversation.id,
+    conversation.status,
+    conversation.assigned_to,
+    conversation.channel
+  into current_conversation
+  from public.conversations as conversation
+  where conversation.id =
+        p_conversation_id
+    and conversation.organization_id =
+        p_organization_id
+  for update;
+
+  if not found then
+    raise exception
+      'Conversa não encontrada.';
+  end if;
+
+  if not private.can_reply_conversation(
+    p_conversation_id
+  ) then
+    raise exception
+      'Você não possui permissão para responder esta conversa.';
+  end if;
+
+  if current_conversation.status =
+     'archived' then
+    raise exception
+      'Uma conversa arquivada não pode receber novas mensagens.';
+  end if;
+
+  if nullif(
+    pg_catalog.btrim(
+      p_body
+    ),
+    ''
+  ) is null then
+    raise exception
+      'Digite uma mensagem antes de enviar.';
+  end if;
+
+  -- O bloqueio é aplicado apenas ao canal WhatsApp.
+  if current_conversation.channel =
+     'whatsapp' then
+
+    select
+      max(
+        coalesce(
+          message.sent_at,
+          message.created_at
+        )
+      )
+    into last_inbound_at
+    from public.messages as message
+    where message.organization_id =
+          p_organization_id
+      and message.conversation_id =
+          p_conversation_id
+      and message.direction =
+          'inbound';
+
+    window_expires_at :=
+      case
+        when last_inbound_at is null
+          then null
+        else
+          last_inbound_at
+          + interval '24 hours'
+      end;
+
+    if window_expires_at is null
+       or now() >= window_expires_at then
+      raise exception
+        'A janela de atendimento de 24 horas está encerrada. Envie um template aprovado para iniciar ou retomar a conversa.';
+    end if;
+  end if;
+
+  select
+    coalesce(
+      profile.full_name,
+      profile.email,
+      'Usuário'
+    ),
+    coalesce(
+      role.name,
+      role.code,
+      'Usuário'
+    )
+  into
+    sender_name,
+    sender_role
+  from public.profiles as profile
+  join public.organization_members as member
+    on member.user_id =
+       profile.id
+   and member.organization_id =
+       p_organization_id
+   and member.status =
+       'active'
+  left join public.roles as role
+    on role.id =
+       member.role_id
+  where profile.id =
+        actor_id
+  limit 1;
+
+  if sender_name is null then
+    raise exception
+      'O perfil do remetente não está disponível nesta empresa.';
+  end if;
+
+  -- Ao responder uma conversa resolvida,
+  -- ela volta para o atendimento.
+  if current_conversation.status =
+     'resolved' then
+    update public.conversations
+    set
+      status = 'open',
+      updated_by = actor_id,
+      updated_at = now()
+    where id =
+          p_conversation_id
+      and organization_id =
+          p_organization_id;
+  end if;
+
+  insert into public.messages (
+    organization_id,
+    conversation_id,
+    direction,
+    message_type,
+    body,
+    sender_user_id,
+    sender_name_snapshot,
+    sender_role_snapshot,
+    status,
+    metadata,
+    sent_at
+  )
+  values (
+    p_organization_id,
+    p_conversation_id,
+    'outbound',
+    'text',
+    pg_catalog.btrim(
+      p_body
+    ),
+    actor_id,
+    sender_name,
+    sender_role,
+    'queued',
+    pg_catalog.jsonb_build_object(
+      'source',
+        'crm',
+      'delivery_mode',
+        'local_queue',
+      'whatsapp_window_checked_at',
+        now(),
+      'whatsapp_window_expires_at',
+        window_expires_at
+    ),
+    now()
+  )
+  returning
+    id,
+    sent_at
+  into
+    new_message_id,
+    new_message_at;
+
+  return pg_catalog.jsonb_build_object(
+    'message_id',
+      new_message_id,
+    'conversation_id',
+      p_conversation_id,
+    'queued',
+      true,
+    'status',
+      'queued',
+    'sent_at',
+      new_message_at,
+    'whatsapp_window_expires_at',
+      window_expires_at
+  );
+end;
+$function$
+"
+public,send_crm_whatsapp_template,"p_organization_id uuid, p_conversation_id uuid, p_template_name text, p_language_code text, p_parameters jsonb","CREATE OR REPLACE FUNCTION public.send_crm_whatsapp_template(p_organization_id uuid, p_conversation_id uuid, p_template_name text, p_language_code text, p_parameters jsonb DEFAULT '[]'::jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare
+  actor_id uuid := auth.uid();
+  current_conversation record;
+
+  normalized_template_name text;
+  normalized_language_code text;
+  safe_parameters jsonb;
+  customer_name text;
+  rendered_body text;
+
+  sender_name text;
+  sender_role text;
+  new_message_id uuid;
+  new_message_at timestamptz;
+begin
+  if actor_id is null then
+    raise exception
+      'É necessário estar autenticado para enviar templates.';
+  end if;
+
+  if not private.is_organization_member(
+    p_organization_id
+  ) then
+    raise exception
+      'O usuário não pertence à empresa informada.';
+  end if;
+
+  select
+    conversation.id,
+    conversation.status,
+    conversation.assigned_to,
+    conversation.channel
+  into current_conversation
+  from public.conversations as conversation
+  where conversation.id =
+        p_conversation_id
+    and conversation.organization_id =
+        p_organization_id
+  for update;
+
+  if not found then
+    raise exception
+      'Conversa não encontrada.';
+  end if;
+
+  if current_conversation.channel <>
+     'whatsapp' then
+    raise exception
+      'A conversa não utiliza o canal WhatsApp.';
+  end if;
+
+  if not private.can_reply_conversation(
+    p_conversation_id
+  ) then
+    raise exception
+      'Você não possui permissão para responder esta conversa.';
+  end if;
+
+  if current_conversation.status =
+     'archived' then
+    raise exception
+      'Uma conversa arquivada não pode receber novas mensagens.';
+  end if;
+
+  normalized_template_name :=
+    pg_catalog.lower(
+      pg_catalog.btrim(
+        coalesce(
+          p_template_name,
+          ''
+        )
+      )
+    );
+
+  normalized_language_code :=
+    pg_catalog.btrim(
+      coalesce(
+        p_language_code,
+        ''
+      )
+    );
+
+  -- Nesta etapa somente o modelo efetivamente aprovado é aceito.
+  if normalized_template_name <>
+     'reativar_chat' then
+    raise exception
+      'Template não autorizado: %',
+      normalized_template_name;
+  end if;
+
+  if normalized_language_code <>
+     'pt_BR' then
+    raise exception
+      'Idioma não autorizado para o template: %',
+      normalized_language_code;
+  end if;
+
+  safe_parameters :=
+    coalesce(
+      p_parameters,
+      '[]'::jsonb
+    );
+
+  if pg_catalog.jsonb_typeof(
+    safe_parameters
+  ) <> 'array' then
+    raise exception
+      'Os parâmetros do template devem ser enviados como uma lista.';
+  end if;
+
+  if pg_catalog.jsonb_array_length(
+    safe_parameters
+  ) <> 1 then
+    raise exception
+      'O template reativar_chat exige exatamente um parâmetro.';
+  end if;
+
+  customer_name :=
+    nullif(
+      pg_catalog.btrim(
+        safe_parameters ->> 0
+      ),
+      ''
+    );
+
+  if customer_name is null then
+    raise exception
+      'O nome do contato é obrigatório para enviar o template.';
+  end if;
+
+  customer_name :=
+    pg_catalog.left(
+      customer_name,
+      120
+    );
+
+  rendered_body :=
+    'Olá, ' ||
+    customer_name ||
+    '. Tudo bem?🌞';
+
+  select
+    coalesce(
+      profile.full_name,
+      profile.email,
+      'Usuário'
+    ),
+    coalesce(
+      role.name,
+      role.code,
+      'Usuário'
+    )
+  into
+    sender_name,
+    sender_role
+  from public.profiles as profile
+  join public.organization_members as member
+    on member.user_id =
+       profile.id
+   and member.organization_id =
+       p_organization_id
+   and member.status =
+       'active'
+  left join public.roles as role
+    on role.id =
+       member.role_id
+  where profile.id =
+        actor_id
+  limit 1;
+
+  if sender_name is null then
+    raise exception
+      'O perfil do remetente não está disponível nesta empresa.';
+  end if;
+
+  if current_conversation.status =
+     'resolved' then
+    update public.conversations
+    set
+      status = 'open',
+      updated_by = actor_id,
+      updated_at = now()
+    where id =
+          p_conversation_id
+      and organization_id =
+          p_organization_id;
+  end if;
+
+  insert into public.messages (
+    organization_id,
+    conversation_id,
+    direction,
+    message_type,
+    body,
+    sender_user_id,
+    sender_name_snapshot,
+    sender_role_snapshot,
+    status,
+    metadata,
+    sent_at
+  )
+  values (
+    p_organization_id,
+    p_conversation_id,
+    'outbound',
+    'template',
+    rendered_body,
+    actor_id,
+    sender_name,
+    sender_role,
+    'queued',
+    pg_catalog.jsonb_build_object(
+      'source',
+        'crm',
+      'delivery_mode',
+        'template_queue',
+      'whatsapp_template',
+        pg_catalog.jsonb_build_object(
+          'name',
+            normalized_template_name,
+          'language_code',
+            normalized_language_code,
+          'parameters',
+            safe_parameters
+        )
+    ),
+    now()
+  )
+  returning
+    id,
+    sent_at
+  into
+    new_message_id,
+    new_message_at;
+
+  return pg_catalog.jsonb_build_object(
+    'message_id',
+      new_message_id,
+    'conversation_id',
+      p_conversation_id,
+    'queued',
+      true,
+    'status',
+      'queued',
+    'sent_at',
+      new_message_at,
+    'template_name',
+      normalized_template_name,
+    'language_code',
+      normalized_language_code,
+    'body',
+      rendered_body
+  );
+end;
+$function$
+"
+public,set_updated_at,,"CREATE OR REPLACE FUNCTION public.set_updated_at()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO 'public'
+AS $function$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$function$
+"
+public,toggle_crm_task,"p_organization_id uuid, p_task_id uuid","CREATE OR REPLACE FUNCTION public.toggle_crm_task(p_organization_id uuid, p_task_id uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare
+  actor_id uuid := auth.uid();
+  current_task record;
+  new_status text;
+  reminder_minutes integer;
+  target_remind_at timestamptz;
+  reminder_recreated boolean := false;
+begin
+  if actor_id is null then
+    raise exception 'É necessário estar autenticado para atualizar tarefas.';
+  end if;
+
+  select
+    task.id,
+    task.organization_id,
+    task.status,
+    task.assigned_to,
+    task.starts_at,
+    task.metadata
+  into current_task
+  from public.tasks as task
+  where task.id = p_task_id
+    and task.organization_id = p_organization_id
+  for update;
+
+  if not found then
+    raise exception 'Tarefa não encontrada ou indisponível para este usuário.';
+  end if;
+
+  if not private.can_edit_task(p_task_id) then
+    raise exception 'Você não possui permissão para atualizar esta tarefa.';
+  end if;
+
+  new_status :=
+    case
+      when current_task.status = 'completed'
+        then 'pending'
+      else 'completed'
+    end;
+
+  update public.tasks
+  set
+    status = new_status,
+    completed_at =
+      case
+        when new_status = 'completed' then now()
+        else null
+      end,
+    updated_by = actor_id
+  where id = p_task_id
+    and organization_id = p_organization_id;
+
+  if new_status = 'completed' then
+    update public.task_reminders
+    set
+      status = 'cancelled',
+      updated_at = now()
+    where task_id = p_task_id
+      and organization_id = p_organization_id
+      and status in ('pending', 'processing');
+  else
+    begin
+      reminder_minutes :=
+        nullif(
+          current_task.metadata ->> 'reminder_minutes',
+          ''
+        )::integer;
+    exception
+      when invalid_text_representation then
+        reminder_minutes := 0;
+    end;
+
+    reminder_minutes := coalesce(reminder_minutes, 0);
+
+    if reminder_minutes > 0 then
+      target_remind_at :=
+        current_task.starts_at
+        - pg_catalog.make_interval(mins => reminder_minutes);
+
+      if target_remind_at > now() then
+        insert into public.task_reminders (
+          organization_id,
+          task_id,
+          user_id,
+          channel,
+          remind_at,
+          status,
+          sent_at,
+          error_message,
+          created_by
+        )
+        values (
+          p_organization_id,
+          p_task_id,
+          current_task.assigned_to,
+          'in_app',
+          target_remind_at,
+          'pending',
+          null,
+          null,
+          actor_id
+        )
+        on conflict (
+          task_id,
+          user_id,
+          channel,
+          remind_at
+        )
+        do update
+        set
+          status = 'pending',
+          sent_at = null,
+          error_message = null,
+          updated_at = now();
+
+        reminder_recreated := true;
+      end if;
+    end if;
+  end if;
+
+  return jsonb_build_object(
+    'task_id', p_task_id,
+    'status', new_status,
+    'done', new_status = 'completed',
+    'updated', true,
+    'reminder_recreated', reminder_recreated
+  );
+end;
+$function$
+"
+public,transfer_crm_conversation,"p_organization_id uuid, p_conversation_id uuid, p_user_id uuid","CREATE OR REPLACE FUNCTION public.transfer_crm_conversation(p_organization_id uuid, p_conversation_id uuid, p_user_id uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare
+  actor_id uuid := auth.uid();
+  current_conversation record;
+  target_pipeline_id uuid;
+begin
+  if actor_id is null then
+    raise exception
+      'É necessário estar autenticado para transferir conversas.';
+  end if;
+
+  if not private.is_organization_member(
+    p_organization_id
+  ) then
+    raise exception
+      'O usuário não pertence à empresa informada.';
+  end if;
+
+  if not private.has_permission(
+    p_organization_id,
+    'conversations.assign'
+  ) then
+    raise exception
+      'Você não possui permissão para transferir conversas.';
+  end if;
+
+  select
+    conversation.id,
+    conversation.assigned_to,
+    conversation.lead_id,
+    conversation.status
+  into current_conversation
+  from public.conversations as conversation
+  where conversation.id = p_conversation_id
+    and conversation.organization_id =
+        p_organization_id
+  for update;
+
+  if not found then
+    raise exception
+      'Conversa não encontrada.';
+  end if;
+
+  if not private.can_assign_conversation(
+    p_conversation_id
+  ) then
+    raise exception
+      'Esta conversa não está disponível para transferência.';
+  end if;
+
+  if not exists (
+    select 1
+    from public.organization_members as member
+    where member.organization_id =
+          p_organization_id
+      and member.user_id = p_user_id
+      and member.status = 'active'
+  ) then
+    raise exception
+      'O novo responsável não pertence à empresa ou está inativo.';
+  end if;
+
+  if not exists (
+    select 1
+    from public.organization_members as member
+    join public.role_permissions as role_permission
+      on role_permission.role_id =
+         member.role_id
+    join public.permissions as permission
+      on permission.id =
+         role_permission.permission_id
+    where member.organization_id =
+          p_organization_id
+      and member.user_id = p_user_id
+      and member.status = 'active'
+      and permission.code in (
+        'conversations.read_assigned',
+        'conversations.read_all'
+      )
+  ) then
+    raise exception
+      'O novo responsável não possui acesso a conversas atribuídas.';
+  end if;
+
+  if current_conversation.lead_id is not null then
+    select lead.pipeline_id
+    into target_pipeline_id
+    from public.leads as lead
+    where lead.id =
+          current_conversation.lead_id
+      and lead.organization_id =
+          p_organization_id;
+
+    if target_pipeline_id is not null
+       and not private.user_can_access_pipeline(
+         p_user_id,
+         target_pipeline_id
+       ) then
+      raise exception
+        'O novo responsável não possui acesso ao funil deste lead.';
+    end if;
+  end if;
+
+  if current_conversation.assigned_to is not distinct from p_user_id then
+    return jsonb_build_object(
+      'conversation_id',
+      p_conversation_id,
+      'assigned_to',
+      p_user_id,
+      'transferred',
+      false,
+      'reason',
+      'same_user'
+    );
+  end if;
+
+  update public.conversations
+  set
+    assigned_to = p_user_id,
+    updated_by = actor_id,
+    updated_at = now()
+  where id = p_conversation_id
+    and organization_id =
+        p_organization_id;
+
+  -- O gatilho conversations_record_assignment_change
+  -- registra a alteração no histórico.
+
+  return jsonb_build_object(
+    'conversation_id',
+    p_conversation_id,
+    'previous_user_id',
+    current_conversation.assigned_to,
+    'assigned_to',
+    p_user_id,
+    'transferred',
+    true
+  );
+end;
+$function$
+"
+public,update_crm_lead_full,"p_organization_id uuid, p_lead_id uuid, p_pipeline_id uuid, p_stage_id uuid, p_source_id uuid, p_full_name text, p_phone text, p_email text, p_city text, p_state text, p_title text, p_assigned_to uuid, p_priority text, p_temperature text, p_score smallint, p_estimated_value numeric, p_company_name text, p_notes text, p_utm_campaign text, p_tag_names text[], p_custom_values jsonb","CREATE OR REPLACE FUNCTION public.update_crm_lead_full(p_organization_id uuid, p_lead_id uuid, p_pipeline_id uuid, p_stage_id uuid, p_source_id uuid, p_full_name text, p_phone text DEFAULT NULL::text, p_email text DEFAULT NULL::text, p_city text DEFAULT NULL::text, p_state text DEFAULT NULL::text, p_title text DEFAULT NULL::text, p_assigned_to uuid DEFAULT NULL::uuid, p_priority text DEFAULT 'medium'::text, p_temperature text DEFAULT 'cold'::text, p_score smallint DEFAULT 0, p_estimated_value numeric DEFAULT NULL::numeric, p_company_name text DEFAULT NULL::text, p_notes text DEFAULT NULL::text, p_utm_campaign text DEFAULT NULL::text, p_tag_names text[] DEFAULT ARRAY[]::text[], p_custom_values jsonb DEFAULT '{}'::jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare
+  actor_id uuid;
+  current_lead record;
+  target_assigned_to uuid;
+  normalized_phone text;
+  normalized_email text;
+  conflicting_contact_id uuid;
+  custom_entry record;
+  field_record record;
+  value_text text;
+  value_number numeric;
+  value_boolean boolean;
+  value_date date;
+  value_timestamp timestamptz;
+  value_json jsonb;
+begin
+  actor_id := auth.uid();
+
+  if actor_id is null then
+    raise exception 'É necessário estar autenticado para editar leads.';
+  end if;
+
+  if not private.is_organization_member(p_organization_id) then
+    raise exception 'O usuário não pertence à empresa informada.';
+  end if;
+
+  if not (
+    private.is_organization_admin(p_organization_id)
+    or private.has_permission(p_organization_id, 'leads.update')
+  ) then
+    raise exception 'Você não possui permissão para editar leads.';
+  end if;
+
+  select
+    lead.id,
+    lead.contact_id,
+    lead.pipeline_id,
+    lead.stage_id,
+    lead.assigned_to,
+    lead.raw_payload
+  into current_lead
+  from public.leads as lead
+  where lead.id = p_lead_id
+    and lead.organization_id = p_organization_id
+  for update;
+
+  if not found then
+    raise exception 'Lead não encontrado.';
+  end if;
+
+  if not private.user_can_access_pipeline(actor_id, current_lead.pipeline_id) then
+    raise exception 'Você não possui acesso ao funil atual deste lead.';
+  end if;
+
+  if not private.is_organization_admin(p_organization_id)
+     and not private.has_permission(p_organization_id, 'leads.read_all')
+     and not (
+       current_lead.assigned_to = actor_id
+       or (
+         current_lead.assigned_to is null
+         and private.has_permission(p_organization_id, 'leads.read_unassigned')
+       )
+     ) then
+    raise exception 'Este lead não está no seu escopo de acesso.';
+  end if;
+
+  if nullif(pg_catalog.btrim(p_full_name), '') is null then
+    raise exception 'Informe o nome do contato.';
+  end if;
+
+  normalized_phone := public.normalize_phone(p_phone);
+  normalized_email := public.normalize_email(p_email);
+
+  if normalized_phone is null and normalized_email is null then
+    raise exception 'Informe pelo menos um telefone ou e-mail.';
+  end if;
+
+  if p_state is not null
+     and nullif(pg_catalog.btrim(p_state), '') is not null
+     and pg_catalog.upper(pg_catalog.btrim(p_state)) !~ '^[A-Z]{2}$' then
+    raise exception 'O estado deve possuir duas letras.';
+  end if;
+
+  if p_priority not in ('low', 'medium', 'high', 'urgent') then
+    raise exception 'Prioridade inválida.';
+  end if;
+
+  if p_temperature not in ('cold', 'warm', 'hot') then
+    raise exception 'Temperatura inválida.';
+  end if;
+
+  if p_score < 0 or p_score > 100 then
+    raise exception 'O score deve estar entre 0 e 100.';
+  end if;
+
+  if p_estimated_value is not null and p_estimated_value < 0 then
+    raise exception 'O valor estimado não pode ser negativo.';
+  end if;
+
+  if not exists (
+    select 1
+    from public.pipelines as pipeline
+    where pipeline.id = p_pipeline_id
+      and pipeline.organization_id = p_organization_id
+      and pipeline.status = 'active'
+  ) then
+    raise exception 'O funil informado não existe ou está inativo.';
+  end if;
+
+  if not private.user_can_access_pipeline(actor_id, p_pipeline_id) then
+    raise exception 'Você não possui acesso ao funil selecionado.';
+  end if;
+
+  if not exists (
+    select 1
+    from public.pipeline_stages as stage
+    where stage.id = p_stage_id
+      and stage.pipeline_id = p_pipeline_id
+      and stage.organization_id = p_organization_id
+      and stage.is_active = true
+  ) then
+    raise exception 'A etapa não pertence ao funil informado ou está inativa.';
+  end if;
+
+  if not private.can_operate_pipeline_stage(p_stage_id) then
+    raise exception 'Você não possui acesso operacional à etapa selecionada.';
+  end if;
+
+  if current_lead.stage_id <> p_stage_id
+     and not (
+       private.is_organization_admin(p_organization_id)
+       or private.has_permission(p_organization_id, 'leads.move')
+       or private.has_permission(p_organization_id, 'leads.update')
+     ) then
+    raise exception 'Você não possui permissão para alterar a etapa.';
+  end if;
+
+  if not exists (
+    select 1
+    from public.lead_sources as source
+    where source.id = p_source_id
+      and source.organization_id = p_organization_id
+      and source.is_active = true
+  ) then
+    raise exception 'A origem selecionada não existe ou está inativa.';
+  end if;
+
+  target_assigned_to := coalesce(p_assigned_to, actor_id);
+
+  if target_assigned_to <> current_lead.assigned_to
+     and not (
+       private.is_organization_admin(p_organization_id)
+       or private.has_permission(p_organization_id, 'leads.assign')
+     ) then
+    raise exception 'Você não possui permissão para alterar o responsável.';
+  end if;
+
+  if not exists (
+    select 1
+    from public.organization_members as member
+    where member.organization_id = p_organization_id
+      and member.user_id = target_assigned_to
+      and member.status = 'active'
+  ) then
+    raise exception 'O responsável selecionado não é um membro ativo da empresa.';
+  end if;
+
+  if not private.user_can_access_pipeline(target_assigned_to, p_pipeline_id) then
+    raise exception 'O responsável não possui acesso ao funil selecionado.';
+  end if;
+
+  select contact.id
+  into conflicting_contact_id
+  from public.contacts as contact
+  where contact.organization_id = p_organization_id
+    and contact.id <> current_lead.contact_id
+    and (
+      (normalized_phone is not null and contact.phone_normalized = normalized_phone)
+      or
+      (normalized_email is not null and contact.email_normalized = normalized_email)
+    )
+  limit 1;
+
+  if conflicting_contact_id is not null then
+    raise exception 'O telefone ou e-mail informado já pertence a outro contato.';
+  end if;
+
+  update public.contacts
+  set
+    full_name = pg_catalog.btrim(p_full_name),
+    phone = nullif(pg_catalog.btrim(p_phone), ''),
+    email = normalized_email,
+    company_name = nullif(pg_catalog.btrim(p_company_name), ''),
+    city = nullif(pg_catalog.btrim(p_city), ''),
+    state = nullif(pg_catalog.upper(pg_catalog.btrim(p_state)), ''),
+    notes = nullif(pg_catalog.btrim(p_notes), ''),
+    updated_at = now()
+  where id = current_lead.contact_id
+    and organization_id = p_organization_id;
+
+  update public.leads
+  set
+    pipeline_id = p_pipeline_id,
+    stage_id = p_stage_id,
+    source_id = p_source_id,
+    title = coalesce(
+      nullif(pg_catalog.btrim(p_title), ''),
+      pg_catalog.btrim(p_full_name)
+    ),
+    assigned_to = target_assigned_to,
+    priority = p_priority,
+    temperature = p_temperature,
+    score = p_score,
+    estimated_value = p_estimated_value,
+    utm_campaign = nullif(pg_catalog.btrim(p_utm_campaign), ''),
+    raw_payload =
+      (
+        coalesce(current_lead.raw_payload, '{}'::jsonb)
+        - 'notes'
+        - 'company_name'
+      )
+      || case
+           when nullif(pg_catalog.btrim(p_notes), '') is not null
+           then jsonb_build_object('notes', pg_catalog.btrim(p_notes))
+           else '{}'::jsonb
+         end
+      || case
+           when nullif(pg_catalog.btrim(p_company_name), '') is not null
+           then jsonb_build_object('company_name', pg_catalog.btrim(p_company_name))
+           else '{}'::jsonb
+         end,
+    updated_by = actor_id,
+    updated_at = now(),
+    last_activity_at = now()
+  where id = p_lead_id
+    and organization_id = p_organization_id;
+
+  if exists (
+    select 1
+    from unnest(coalesce(p_tag_names, array[]::text[])) as selected_tag(name)
+    where nullif(pg_catalog.btrim(selected_tag.name), '') is not null
+      and not exists (
+        select 1
+        from public.tags as tag
+        where tag.organization_id = p_organization_id
+          and tag.is_active = true
+          and pg_catalog.lower(tag.name) =
+              pg_catalog.lower(pg_catalog.btrim(selected_tag.name))
+      )
+  ) then
+    raise exception 'Uma ou mais etiquetas selecionadas não existem ou estão inativas.';
+  end if;
+
+  delete from public.lead_tags
+  where organization_id = p_organization_id
+    and lead_id = p_lead_id;
+
+  insert into public.lead_tags (
+    organization_id,
+    lead_id,
+    tag_id,
+    assigned_by
+  )
+  select
+    p_organization_id,
+    p_lead_id,
+    tag.id,
+    actor_id
+  from public.tags as tag
+  where tag.organization_id = p_organization_id
+    and tag.is_active = true
+    and exists (
+      select 1
+      from unnest(coalesce(p_tag_names, array[]::text[])) as selected_tag(name)
+      where pg_catalog.lower(pg_catalog.btrim(selected_tag.name)) =
+            pg_catalog.lower(tag.name)
+    )
+  on conflict (lead_id, tag_id) do nothing;
+
+  if jsonb_typeof(coalesce(p_custom_values, '{}'::jsonb)) <> 'object' then
+    raise exception 'Os campos personalizados devem ser enviados como objeto JSON.';
+  end if;
+
+  for custom_entry in
+    select entry.key, entry.value
+    from jsonb_each(coalesce(p_custom_values, '{}'::jsonb)) as entry
+  loop
+    select field.id, field.field_type
+    into field_record
+    from public.custom_fields as field
+    where field.organization_id = p_organization_id
+      and field.code = custom_entry.key
+      and field.is_active = true
+      and (field.pipeline_id is null or field.pipeline_id = p_pipeline_id)
+    limit 1;
+
+    if not found then
+      raise exception 'Campo personalizado inválido: %', custom_entry.key;
+    end if;
+
+    if custom_entry.value = 'null'::jsonb
+       or (
+         jsonb_typeof(custom_entry.value) = 'string'
+         and nullif(pg_catalog.btrim(custom_entry.value #>> '{}'), '') is null
+       ) then
+      delete from public.lead_custom_values
+      where organization_id = p_organization_id
+        and lead_id = p_lead_id
+        and field_id = field_record.id;
+      continue;
+    end if;
+
+    value_text := null;
+    value_number := null;
+    value_boolean := null;
+    value_date := null;
+    value_timestamp := null;
+    value_json := null;
+
+    case field_record.field_type
+      when 'text', 'textarea', 'phone', 'email', 'url', 'user' then
+        value_text := pg_catalog.btrim(custom_entry.value #>> '{}');
+
+      when 'number', 'currency' then
+        value_number := (custom_entry.value #>> '{}')::numeric;
+
+      when 'boolean' then
+        if jsonb_typeof(custom_entry.value) = 'boolean' then
+          value_boolean := (custom_entry.value #>> '{}')::boolean;
+        else
+          value_boolean := case
+            when pg_catalog.lower(pg_catalog.btrim(custom_entry.value #>> '{}'))
+                 in ('true', 'sim', '1') then true
+            when pg_catalog.lower(pg_catalog.btrim(custom_entry.value #>> '{}'))
+                 in ('false', 'não', 'nao', '0') then false
+            else null
+          end;
+
+          if value_boolean is null then
+            raise exception 'Valor booleano inválido no campo %.', custom_entry.key;
+          end if;
+        end if;
+
+      when 'date' then
+        value_date := (custom_entry.value #>> '{}')::date;
+
+      when 'datetime' then
+        value_timestamp := (custom_entry.value #>> '{}')::timestamptz;
+
+      when 'select' then
+        select option.value
+        into value_text
+        from public.custom_field_options as option
+        where option.organization_id = p_organization_id
+          and option.field_id = field_record.id
+          and option.is_active = true
+          and (
+            option.value = custom_entry.value #>> '{}'
+            or pg_catalog.lower(option.label) =
+               pg_catalog.lower(custom_entry.value #>> '{}')
+          )
+        limit 1;
+
+        if value_text is null then
+          raise exception 'Opção inválida no campo %.', custom_entry.key;
+        end if;
+
+      when 'multiselect' then
+        if jsonb_typeof(custom_entry.value) <> 'array' then
+          raise exception 'O campo % deve receber uma lista.', custom_entry.key;
+        end if;
+
+        select jsonb_agg(to_jsonb(option.value) order by selected_option.position)
+        into value_json
+        from jsonb_array_elements_text(custom_entry.value)
+          with ordinality as selected_option(selected_value, position)
+        join public.custom_field_options as option
+          on option.organization_id = p_organization_id
+         and option.field_id = field_record.id
+         and option.is_active = true
+         and (
+           option.value = selected_option.selected_value
+           or pg_catalog.lower(option.label) =
+              pg_catalog.lower(selected_option.selected_value)
+         );
+
+        if value_json is null
+           or jsonb_array_length(value_json) <> jsonb_array_length(custom_entry.value) then
+          raise exception 'Uma ou mais opções são inválidas no campo %.', custom_entry.key;
+        end if;
+
+      else
+        raise exception 'Tipo não suportado no campo %.', custom_entry.key;
+    end case;
+
+    insert into public.lead_custom_values (
+      organization_id,
+      lead_id,
+      field_id,
+      value_text,
+      value_number,
+      value_boolean,
+      value_date,
+      value_timestamp,
+      value_json,
+      created_by,
+      updated_by
+    )
+    values (
+      p_organization_id,
+      p_lead_id,
+      field_record.id,
+      value_text,
+      value_number,
+      value_boolean,
+      value_date,
+      value_timestamp,
+      value_json,
+      actor_id,
+      actor_id
+    )
+    on conflict (lead_id, field_id)
+    do update set
+      value_text = excluded.value_text,
+      value_number = excluded.value_number,
+      value_boolean = excluded.value_boolean,
+      value_date = excluded.value_date,
+      value_timestamp = excluded.value_timestamp,
+      value_json = excluded.value_json,
+      updated_by = actor_id,
+      updated_at = now();
+  end loop;
+
+  return jsonb_build_object(
+    'lead_id', p_lead_id,
+    'updated', true,
+    'stage_changed', current_lead.stage_id <> p_stage_id,
+    'owner_changed', current_lead.assigned_to is distinct from target_assigned_to
+  );
+end;
+$function$
+"
+public,update_crm_task,"p_organization_id uuid, p_task_id uuid, p_title text, p_description text, p_task_type text, p_priority text, p_assigned_to uuid, p_lead_id uuid, p_starts_at timestamp with time zone, p_due_at timestamp with time zone, p_reminder_minutes integer","CREATE OR REPLACE FUNCTION public.update_crm_task(p_organization_id uuid, p_task_id uuid, p_title text, p_description text, p_task_type text, p_priority text, p_assigned_to uuid, p_lead_id uuid, p_starts_at timestamp with time zone, p_due_at timestamp with time zone, p_reminder_minutes integer DEFAULT 0)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare
+  actor_id uuid := auth.uid();
+  current_task record;
+  old_reminder_minutes integer;
+  target_remind_at timestamptz;
+  reminder_changed boolean;
+begin
+  if actor_id is null then
+    raise exception 'É necessário estar autenticado para editar tarefas.';
+  end if;
+
+  if not private.is_organization_member(p_organization_id) then
+    raise exception 'O usuário não pertence à empresa informada.';
+  end if;
+
+  select
+    task.id,
+    task.organization_id,
+    task.assigned_to,
+    task.starts_at,
+    task.due_at,
+    task.metadata
+  into current_task
+  from public.tasks as task
+  where task.id = p_task_id
+    and task.organization_id = p_organization_id
+  for update;
+
+  if not found then
+    raise exception 'Tarefa não encontrada ou indisponível para este usuário.';
+  end if;
+
+  if not private.can_edit_task(p_task_id) then
+    raise exception 'Você não possui permissão para editar esta tarefa.';
+  end if;
+
+  if nullif(pg_catalog.btrim(p_title), '') is null then
+    raise exception 'Informe o título da tarefa.';
+  end if;
+
+  if char_length(pg_catalog.btrim(p_title)) > 180 then
+    raise exception 'O título da tarefa deve possuir no máximo 180 caracteres.';
+  end if;
+
+  if p_task_type not in (
+    'call',
+    'whatsapp',
+    'visit',
+    'meeting',
+    'proposal',
+    'follow_up',
+    'internal',
+    'other'
+  ) then
+    raise exception 'Tipo de tarefa inválido.';
+  end if;
+
+  if p_priority not in ('low', 'medium', 'high', 'urgent') then
+    raise exception 'Prioridade da tarefa inválida.';
+  end if;
+
+  if p_starts_at is null or p_due_at is null then
+    raise exception 'Informe a data e o horário da tarefa.';
+  end if;
+
+  if p_due_at < p_starts_at then
+    raise exception 'O término da tarefa não pode ser anterior ao início.';
+  end if;
+
+  if p_reminder_minutes is null
+     or p_reminder_minutes < 0
+     or p_reminder_minutes > 525600 then
+    raise exception 'O intervalo do lembrete é inválido.';
+  end if;
+
+  if not exists (
+    select 1
+    from public.organization_members as member
+    where member.organization_id = p_organization_id
+      and member.user_id = p_assigned_to
+      and member.status = 'active'
+  ) then
+    raise exception 'O responsável não pertence à empresa ou está inativo.';
+  end if;
+
+  if p_assigned_to <> current_task.assigned_to
+     and p_assigned_to <> actor_id
+     and not private.has_permission(
+       p_organization_id,
+       'tasks.update_all'
+     ) then
+    raise exception 'Você não possui permissão para transferir esta tarefa.';
+  end if;
+
+  if p_lead_id is not null then
+    if not exists (
+      select 1
+      from public.leads as lead
+      where lead.id = p_lead_id
+        and lead.organization_id = p_organization_id
+    ) then
+      raise exception 'O lead vinculado não pertence à empresa.';
+    end if;
+
+    if not private.can_view_lead(p_lead_id) then
+      raise exception 'O lead vinculado não está no seu escopo de acesso.';
+    end if;
+  end if;
+
+  begin
+    old_reminder_minutes :=
+      nullif(
+        current_task.metadata ->> 'reminder_minutes',
+        ''
+      )::integer;
+  exception
+    when invalid_text_representation then
+      old_reminder_minutes := null;
+  end;
+
+  if old_reminder_minutes is null then
+    select
+      greatest(
+        0,
+        round(
+          extract(
+            epoch from (
+              current_task.starts_at - reminder.remind_at
+            )
+          ) / 60
+        )::integer
+      )
+    into old_reminder_minutes
+    from public.task_reminders as reminder
+    where reminder.task_id = p_task_id
+      and reminder.organization_id = p_organization_id
+      and reminder.status <> 'cancelled'
+    order by reminder.created_at desc
+    limit 1;
+  end if;
+
+  old_reminder_minutes := coalesce(old_reminder_minutes, 0);
+
+  reminder_changed :=
+    current_task.starts_at is distinct from p_starts_at
+    or current_task.assigned_to is distinct from p_assigned_to
+    or old_reminder_minutes is distinct from p_reminder_minutes;
+
+  update public.tasks
+  set
+    lead_id = p_lead_id,
+    title = pg_catalog.btrim(p_title),
+    description = nullif(pg_catalog.btrim(p_description), ''),
+    task_type = p_task_type,
+    priority = p_priority,
+    assigned_to = p_assigned_to,
+    starts_at = p_starts_at,
+    due_at = p_due_at,
+    metadata =
+      coalesce(metadata, '{}'::jsonb)
+      || jsonb_build_object(
+        'reminder_minutes',
+        p_reminder_minutes
+      ),
+    updated_by = actor_id
+  where id = p_task_id
+    and organization_id = p_organization_id;
+
+  if reminder_changed then
+    update public.task_reminders
+    set
+      status = 'cancelled',
+      updated_at = now()
+    where task_id = p_task_id
+      and organization_id = p_organization_id
+      and status in ('pending', 'processing');
+
+    if p_reminder_minutes > 0 then
+      target_remind_at :=
+        p_starts_at
+        - pg_catalog.make_interval(mins => p_reminder_minutes);
+
+      insert into public.task_reminders (
+        organization_id,
+        task_id,
+        user_id,
+        channel,
+        remind_at,
+        status,
+        sent_at,
+        error_message,
+        created_by
+      )
+      values (
+        p_organization_id,
+        p_task_id,
+        p_assigned_to,
+        'in_app',
+        target_remind_at,
+        'pending',
+        null,
+        null,
+        actor_id
+      )
+      on conflict (
+        task_id,
+        user_id,
+        channel,
+        remind_at
+      )
+      do update
+      set
+        status = 'pending',
+        sent_at = null,
+        error_message = null,
+        updated_at = now();
+    end if;
+  end if;
+
+  return jsonb_build_object(
+    'task_id', p_task_id,
+    'updated', true,
+    'reminder_changed', reminder_changed
+  );
+end;
+$function$
+"
+public,update_crm_whatsapp_message_status,"p_organization_id uuid, p_external_message_id text, p_status text, p_occurred_at timestamp with time zone, p_recipient_id text, p_error_code text, p_error_title text, p_error_message text, p_metadata jsonb","CREATE OR REPLACE FUNCTION public.update_crm_whatsapp_message_status(p_organization_id uuid, p_external_message_id text, p_status text, p_occurred_at timestamp with time zone DEFAULT now(), p_recipient_id text DEFAULT NULL::text, p_error_code text DEFAULT NULL::text, p_error_title text DEFAULT NULL::text, p_error_message text DEFAULT NULL::text, p_metadata jsonb DEFAULT '{}'::jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare
+  normalized_external_id text;
+  normalized_status text;
+  event_time timestamptz;
+  safe_metadata jsonb;
+
+  target_message record;
+  next_status text;
+  status_changed boolean := false;
+  status_event jsonb;
+begin
+  normalized_external_id :=
+    nullif(
+      pg_catalog.btrim(
+        p_external_message_id
+      ),
+      ''
+    );
+
+  normalized_status :=
+    pg_catalog.lower(
+      pg_catalog.btrim(
+        coalesce(
+          p_status,
+          ''
+        )
+      )
+    );
+
+  event_time :=
+    coalesce(
+      p_occurred_at,
+      now()
+    );
+
+  if normalized_external_id is null then
+    raise exception
+      'O external_message_id é obrigatório.';
+  end if;
+
+  if normalized_external_id not like 'wamid.%' then
+    raise exception
+      'O external_message_id recebido não é um wamid válido.';
+  end if;
+
+  if normalized_status not in (
+    'sent',
+    'delivered',
+    'read',
+    'failed'
+  ) then
+    raise exception
+      'Status do WhatsApp não suportado: %',
+      normalized_status;
+  end if;
+
+  safe_metadata :=
+    case
+      when pg_catalog.jsonb_typeof(
+        coalesce(
+          p_metadata,
+          '{}'::jsonb
+        )
+      ) = 'object'
+      then coalesce(
+        p_metadata,
+        '{}'::jsonb
+      )
+      else pg_catalog.jsonb_build_object(
+        'raw_metadata',
+        p_metadata
+      )
+    end;
+
+  select
+    message.id,
+    message.status,
+    message.metadata,
+    message.error_message,
+    message.failed_at
+  into target_message
+  from public.messages as message
+  where message.organization_id =
+        p_organization_id
+    and message.direction =
+        'outbound'
+    and message.external_message_id =
+        normalized_external_id
+  limit 1
+  for update;
+
+  -- Um evento ""sent"" pode chegar quase ao mesmo tempo que a
+  -- Edge Function grava o wamid. O endpoint fará novas tentativas.
+  if not found then
+    return pg_catalog.jsonb_build_object(
+      'matched', false,
+      'updated', false,
+      'external_message_id',
+        normalized_external_id,
+      'status',
+        normalized_status
+    );
+  end if;
+
+  next_status :=
+    target_message.status;
+
+  -- Impede regressão:
+  -- read > delivered > sent > queued
+  if normalized_status = 'read' then
+    if target_message.status in (
+      'queued',
+      'sent',
+      'delivered',
+      'read'
+    ) then
+      next_status := 'read';
+    end if;
+
+  elsif normalized_status = 'delivered' then
+    if target_message.status in (
+      'queued',
+      'sent',
+      'delivered'
+    ) then
+      next_status := 'delivered';
+    end if;
+
+  elsif normalized_status = 'sent' then
+    if target_message.status in (
+      'queued',
+      'sent'
+    ) then
+      next_status := 'sent';
+    end if;
+
+  elsif normalized_status = 'failed' then
+    -- Não substitui uma mensagem já entregue ou lida por uma
+    -- falha tardia ou fora de ordem.
+    if target_message.status in (
+      'queued',
+      'sent',
+      'failed'
+    ) then
+      next_status := 'failed';
+    end if;
+  end if;
+
+  status_changed :=
+    next_status is distinct from
+    target_message.status;
+
+  status_event :=
+    pg_catalog.jsonb_build_object(
+      'status',
+        normalized_status,
+      'occurred_at',
+        event_time,
+      'recipient_id',
+        p_recipient_id,
+      'error_code',
+        p_error_code,
+      'error_title',
+        p_error_title,
+      'error_message',
+        p_error_message,
+      'received_at',
+        now(),
+      'source',
+        'whatsapp_cloud_api'
+    );
+
+  update public.messages
+  set
+    status = next_status,
+
+    failed_at =
+      case
+        when next_status = 'failed'
+          then event_time
+        else failed_at
+      end,
+
+    error_message =
+      case
+        when next_status = 'failed'
+          then coalesce(
+            nullif(
+              pg_catalog.btrim(
+                p_error_message
+              ),
+              ''
+            ),
+            nullif(
+              pg_catalog.btrim(
+                p_error_title
+              ),
+              ''
+            ),
+            case
+              when nullif(
+                pg_catalog.btrim(
+                  p_error_code
+                ),
+                ''
+              ) is not null
+              then
+                'WhatsApp error ' ||
+                pg_catalog.btrim(
+                  p_error_code
+                )
+              else
+                'O WhatsApp informou falha no envio.'
+            end
+          )
+        else error_message
+      end,
+
+    metadata =
+      coalesce(
+        metadata,
+        '{}'::jsonb
+      )
+      || safe_metadata
+      || pg_catalog.jsonb_build_object(
+        'whatsapp_status_last',
+          status_event
+      )
+      || case normalized_status
+          when 'sent' then
+            pg_catalog.jsonb_build_object(
+              'whatsapp_sent_at',
+              event_time
+            )
+          when 'delivered' then
+            pg_catalog.jsonb_build_object(
+              'whatsapp_delivered_at',
+              event_time
+            )
+          when 'read' then
+            pg_catalog.jsonb_build_object(
+              'whatsapp_delivered_at',
+              coalesce(
+                (
+                  metadata
+                    ->> 'whatsapp_delivered_at'
+                )::timestamptz,
+                event_time
+              ),
+              'whatsapp_read_at',
+              event_time
+            )
+          when 'failed' then
+            pg_catalog.jsonb_build_object(
+              'whatsapp_failed_at',
+              event_time
+            )
+          else '{}'::jsonb
+        end
+  where id = target_message.id
+    and organization_id =
+        p_organization_id;
+
+  return pg_catalog.jsonb_build_object(
+    'matched', true,
+    'updated', true,
+    'message_id',
+      target_message.id,
+    'previous_status',
+      target_message.status,
+    'status',
+      next_status,
+    'status_changed',
+      status_changed,
+    'external_message_id',
+      normalized_external_id
+  );
+end;
+$function$
+"

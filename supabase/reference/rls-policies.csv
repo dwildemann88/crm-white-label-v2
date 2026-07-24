@@ -1,0 +1,121 @@
+schemaname,tablename,policyname,permissive,roles,cmd,qual,with_check
+public,contacts,contacts_delete,PERMISSIVE,{authenticated},DELETE,"private.has_permission(organization_id, 'leads.delete'::text)",null
+public,contacts,contacts_insert,PERMISSIVE,{authenticated},INSERT,null,"(private.is_organization_member(organization_id) AND private.has_permission(organization_id, 'leads.create'::text) AND (created_by = ( SELECT auth.uid() AS uid)))"
+public,contacts,contacts_select,PERMISSIVE,{authenticated},SELECT,"(private.has_permission(organization_id, 'leads.read_all'::text) OR (created_by = ( SELECT auth.uid() AS uid)) OR (EXISTS ( SELECT 1
+   FROM leads lead
+  WHERE ((lead.contact_id = contacts.id) AND (lead.organization_id = contacts.organization_id) AND private.can_view_lead(lead.id)))) OR (EXISTS ( SELECT 1
+   FROM conversations conversation
+  WHERE ((conversation.contact_id = contacts.id) AND (conversation.organization_id = contacts.organization_id) AND private.can_view_conversation(conversation.id)))))",null
+public,contacts,contacts_update,PERMISSIVE,{authenticated},UPDATE,"(private.has_permission(organization_id, 'leads.update_all'::text) OR (private.has_permission(organization_id, 'leads.update_assigned'::text) AND ((created_by = ( SELECT auth.uid() AS uid)) OR (EXISTS ( SELECT 1
+   FROM leads lead
+  WHERE ((lead.contact_id = contacts.id) AND (lead.organization_id = contacts.organization_id) AND private.can_edit_lead(lead.id)))))))",private.is_organization_member(organization_id)
+public,conversation_assignment_history,conversation_assignment_history_select,PERMISSIVE,{authenticated},SELECT,private.can_view_conversation(conversation_id),null
+public,conversation_user_state,conversation_user_state_insert,PERMISSIVE,{authenticated},INSERT,null,((user_id = ( SELECT auth.uid() AS uid)) AND private.can_view_conversation(conversation_id))
+public,conversation_user_state,conversation_user_state_select,PERMISSIVE,{authenticated},SELECT,((user_id = ( SELECT auth.uid() AS uid)) AND private.can_view_conversation(conversation_id)),null
+public,conversation_user_state,conversation_user_state_update,PERMISSIVE,{authenticated},UPDATE,((user_id = ( SELECT auth.uid() AS uid)) AND private.can_view_conversation(conversation_id)),((user_id = ( SELECT auth.uid() AS uid)) AND private.can_view_conversation(conversation_id))
+public,conversations,conversations_insert,PERMISSIVE,{authenticated},INSERT,null,"(private.has_permission(organization_id, 'conversations.create'::text) AND (assigned_to = ( SELECT auth.uid() AS uid)) AND ((lead_id IS NULL) OR private.can_view_lead(lead_id)))"
+public,conversations,conversations_select,PERMISSIVE,{authenticated},SELECT,private.can_view_conversation(id),null
+public,conversations,conversations_update,PERMISSIVE,{authenticated},UPDATE,(private.can_reply_conversation(id) OR private.can_assign_conversation(id)),private.is_organization_member(organization_id)
+public,custom_field_options,custom_field_options_delete,PERMISSIVE,{authenticated},DELETE,private.can_manage_custom_field(field_id),null
+public,custom_field_options,custom_field_options_insert,PERMISSIVE,{authenticated},INSERT,null,private.can_manage_custom_field(field_id)
+public,custom_field_options,custom_field_options_select,PERMISSIVE,{authenticated},SELECT,private.can_view_custom_field(field_id),null
+public,custom_field_options,custom_field_options_update,PERMISSIVE,{authenticated},UPDATE,private.can_manage_custom_field(field_id),private.can_manage_custom_field(field_id)
+public,custom_fields,custom_fields_delete,PERMISSIVE,{authenticated},DELETE,"private.has_permission(organization_id, 'custom_fields.manage'::text)",null
+public,custom_fields,custom_fields_insert,PERMISSIVE,{authenticated},INSERT,null,"(private.is_organization_member(organization_id) AND private.has_permission(organization_id, 'custom_fields.manage'::text) AND ((pipeline_id IS NULL) OR private.can_manage_pipeline(pipeline_id)))"
+public,custom_fields,custom_fields_select,PERMISSIVE,{authenticated},SELECT,private.can_view_custom_field(id),null
+public,custom_fields,custom_fields_update,PERMISSIVE,{authenticated},UPDATE,"private.has_permission(organization_id, 'custom_fields.manage'::text)","(private.has_permission(organization_id, 'custom_fields.manage'::text) AND ((pipeline_id IS NULL) OR private.can_manage_pipeline(pipeline_id)))"
+public,lead_assignment_history,lead_assignment_history_select,PERMISSIVE,{authenticated},SELECT,private.can_view_lead(lead_id),null
+public,lead_custom_values,lead_custom_values_delete,PERMISSIVE,{authenticated},DELETE,private.can_edit_lead(lead_id),null
+public,lead_custom_values,lead_custom_values_insert,PERMISSIVE,{authenticated},INSERT,null,(private.can_edit_lead(lead_id) AND private.can_view_custom_field(field_id))
+public,lead_custom_values,lead_custom_values_select,PERMISSIVE,{authenticated},SELECT,(private.can_view_lead(lead_id) AND private.can_view_custom_field(field_id)),null
+public,lead_custom_values,lead_custom_values_update,PERMISSIVE,{authenticated},UPDATE,(private.can_edit_lead(lead_id) AND private.can_view_custom_field(field_id)),(private.can_edit_lead(lead_id) AND private.can_view_custom_field(field_id))
+public,lead_notes,lead_notes_select_visible,PERMISSIVE,{authenticated},SELECT,"(private.is_organization_member(organization_id) AND (EXISTS ( SELECT 1
+   FROM leads lead
+  WHERE ((lead.id = lead_notes.lead_id) AND (lead.organization_id = lead_notes.organization_id) AND private.user_can_access_pipeline(auth.uid(), lead.pipeline_id) AND (private.is_organization_admin(lead_notes.organization_id) OR private.has_permission(lead_notes.organization_id, 'leads.read_all'::text) OR (lead.assigned_to = auth.uid()) OR ((lead.assigned_to IS NULL) AND private.has_permission(lead_notes.organization_id, 'leads.read_unassigned'::text)))))))",null
+public,lead_shares,lead_shares_delete,PERMISSIVE,{authenticated},DELETE,"(private.has_permission(organization_id, 'leads.assign'::text) AND private.can_edit_lead(lead_id))",null
+public,lead_shares,lead_shares_insert,PERMISSIVE,{authenticated},INSERT,null,"(private.has_permission(organization_id, 'leads.assign'::text) AND private.can_edit_lead(lead_id) AND (EXISTS ( SELECT 1
+   FROM leads lead
+  WHERE ((lead.id = lead_shares.lead_id) AND (lead.organization_id = lead_shares.organization_id) AND private.user_can_access_pipeline(lead_shares.user_id, lead.pipeline_id)))))"
+public,lead_shares,lead_shares_select,PERMISSIVE,{authenticated},SELECT,((user_id = ( SELECT auth.uid() AS uid)) OR private.can_view_lead(lead_id)),null
+public,lead_shares,lead_shares_update,PERMISSIVE,{authenticated},UPDATE,"(private.has_permission(organization_id, 'leads.assign'::text) AND private.can_edit_lead(lead_id))","(private.has_permission(organization_id, 'leads.assign'::text) AND private.can_edit_lead(lead_id))"
+public,lead_sources,lead_sources_delete,PERMISSIVE,{authenticated},DELETE,"private.has_permission(organization_id, 'integrations.manage'::text)",null
+public,lead_sources,lead_sources_insert,PERMISSIVE,{authenticated},INSERT,null,"private.has_permission(organization_id, 'integrations.manage'::text)"
+public,lead_sources,lead_sources_select,PERMISSIVE,{authenticated},SELECT,private.is_organization_member(organization_id),null
+public,lead_sources,lead_sources_update,PERMISSIVE,{authenticated},UPDATE,"private.has_permission(organization_id, 'integrations.manage'::text)","private.has_permission(organization_id, 'integrations.manage'::text)"
+public,lead_stage_history,lead_stage_history_select,PERMISSIVE,{authenticated},SELECT,private.can_view_lead(lead_id),null
+public,lead_tags,lead_tags_delete,PERMISSIVE,{authenticated},DELETE,"(private.has_permission(organization_id, 'tags.assign'::text) AND private.can_edit_lead(lead_id))",null
+public,lead_tags,lead_tags_insert,PERMISSIVE,{authenticated},INSERT,null,"(private.has_permission(organization_id, 'tags.assign'::text) AND private.can_edit_lead(lead_id) AND (EXISTS ( SELECT 1
+   FROM tags tag
+  WHERE ((tag.id = lead_tags.tag_id) AND (tag.organization_id = lead_tags.organization_id) AND (tag.is_active = true)))))"
+public,lead_tags,lead_tags_select,PERMISSIVE,{authenticated},SELECT,"(private.has_permission(organization_id, 'tags.read'::text) AND private.can_view_lead(lead_id))",null
+public,leads,leads_delete,PERMISSIVE,{authenticated},DELETE,"(private.has_permission(organization_id, 'leads.delete'::text) AND private.can_view_lead(id))",null
+public,leads,leads_insert,PERMISSIVE,{authenticated},INSERT,null,"(private.has_permission(organization_id, 'leads.create'::text) AND private.can_operate_pipeline_stage(stage_id))"
+public,leads,leads_select,PERMISSIVE,{authenticated},SELECT,private.can_view_lead(id),null
+public,leads,leads_update,PERMISSIVE,{authenticated},UPDATE,private.can_edit_lead(id),(private.is_organization_member(organization_id) AND private.can_operate_pipeline_stage(stage_id))
+public,messages,messages_insert,PERMISSIVE,{authenticated},INSERT,null,"((direction = ANY (ARRAY['outbound'::text, 'internal'::text])) AND (sender_user_id = ( SELECT auth.uid() AS uid)) AND private.can_reply_conversation(conversation_id))"
+public,messages,messages_select,PERMISSIVE,{authenticated},SELECT,private.can_view_conversation(conversation_id),null
+public,notifications,notifications_select,PERMISSIVE,{authenticated},SELECT,"((user_id = ( SELECT auth.uid() AS uid)) AND private.has_permission(organization_id, 'notifications.read'::text))",null
+public,notifications,notifications_update,PERMISSIVE,{authenticated},UPDATE,"((user_id = ( SELECT auth.uid() AS uid)) AND private.has_permission(organization_id, 'notifications.update'::text))","((user_id = ( SELECT auth.uid() AS uid)) AND private.has_permission(organization_id, 'notifications.update'::text))"
+public,organization_branding,branding_delete,PERMISSIVE,{authenticated},DELETE,private.is_platform_admin(),null
+public,organization_branding,branding_insert,PERMISSIVE,{authenticated},INSERT,null,private.is_organization_admin(organization_id)
+public,organization_branding,branding_select,PERMISSIVE,{authenticated},SELECT,private.is_organization_member(organization_id),null
+public,organization_branding,branding_update,PERMISSIVE,{authenticated},UPDATE,private.is_organization_admin(organization_id),private.is_organization_admin(organization_id)
+public,organization_members,organization_members_delete,PERMISSIVE,{authenticated},DELETE,private.is_organization_admin(organization_id),null
+public,organization_members,organization_members_insert,PERMISSIVE,{authenticated},INSERT,null,private.is_organization_admin(organization_id)
+public,organization_members,organization_members_select,PERMISSIVE,{authenticated},SELECT,private.is_organization_member(organization_id),null
+public,organization_members,organization_members_update,PERMISSIVE,{authenticated},UPDATE,private.is_organization_admin(organization_id),private.is_organization_admin(organization_id)
+public,organizations,organizations_delete,PERMISSIVE,{authenticated},DELETE,private.is_platform_admin(),null
+public,organizations,organizations_insert,PERMISSIVE,{authenticated},INSERT,null,(private.is_platform_admin() AND (created_by = ( SELECT auth.uid() AS uid)))
+public,organizations,organizations_select,PERMISSIVE,{authenticated},SELECT,private.is_organization_member(id),null
+public,organizations,organizations_update,PERMISSIVE,{authenticated},UPDATE,private.is_organization_admin(id),private.is_organization_admin(id)
+public,permissions,permissions_delete,PERMISSIVE,{authenticated},DELETE,private.is_platform_admin(),null
+public,permissions,permissions_insert,PERMISSIVE,{authenticated},INSERT,null,private.is_platform_admin()
+public,permissions,permissions_select,PERMISSIVE,{authenticated},SELECT,(( SELECT auth.uid() AS uid) IS NOT NULL),null
+public,permissions,permissions_update,PERMISSIVE,{authenticated},UPDATE,private.is_platform_admin(),private.is_platform_admin()
+public,pipeline_stage_user_access,pipeline_stage_user_access_delete,PERMISSIVE,{authenticated},DELETE,private.is_organization_admin(organization_id),null
+public,pipeline_stage_user_access,pipeline_stage_user_access_insert,PERMISSIVE,{authenticated},INSERT,null,private.is_organization_admin(organization_id)
+public,pipeline_stage_user_access,pipeline_stage_user_access_select,PERMISSIVE,{authenticated},SELECT,"((user_id = ( SELECT auth.uid() AS uid)) OR private.is_organization_admin(organization_id) OR (private.has_permission(organization_id, 'users.read'::text) AND private.has_permission(organization_id, 'leads.read_all'::text)))",null
+public,pipeline_stage_user_access,pipeline_stage_user_access_update,PERMISSIVE,{authenticated},UPDATE,private.is_organization_admin(organization_id),private.is_organization_admin(organization_id)
+public,pipeline_stages,pipeline_stages_delete,PERMISSIVE,{authenticated},DELETE,"private.has_permission(organization_id, 'pipelines.manage'::text)",null
+public,pipeline_stages,pipeline_stages_insert,PERMISSIVE,{authenticated},INSERT,null,"private.has_permission(organization_id, 'pipelines.manage'::text)"
+public,pipeline_stages,pipeline_stages_select,PERMISSIVE,{authenticated},SELECT,private.can_view_pipeline_stage(id),null
+public,pipeline_stages,pipeline_stages_update,PERMISSIVE,{authenticated},UPDATE,"private.has_permission(organization_id, 'pipelines.manage'::text)","private.has_permission(organization_id, 'pipelines.manage'::text)"
+public,pipeline_user_access,pipeline_user_access_delete,PERMISSIVE,{authenticated},DELETE,private.is_organization_admin(organization_id),null
+public,pipeline_user_access,pipeline_user_access_insert,PERMISSIVE,{authenticated},INSERT,null,private.is_organization_admin(organization_id)
+public,pipeline_user_access,pipeline_user_access_select,PERMISSIVE,{authenticated},SELECT,"((user_id = ( SELECT auth.uid() AS uid)) OR private.is_organization_admin(organization_id) OR (private.has_permission(organization_id, 'users.read'::text) AND private.has_permission(organization_id, 'leads.read_all'::text)))",null
+public,pipeline_user_access,pipeline_user_access_update,PERMISSIVE,{authenticated},UPDATE,private.is_organization_admin(organization_id),private.is_organization_admin(organization_id)
+public,pipelines,pipelines_delete,PERMISSIVE,{authenticated},DELETE,"private.has_permission(organization_id, 'pipelines.manage'::text)",null
+public,pipelines,pipelines_insert,PERMISSIVE,{authenticated},INSERT,null,"private.has_permission(organization_id, 'pipelines.manage'::text)"
+public,pipelines,pipelines_select,PERMISSIVE,{authenticated},SELECT,private.can_view_pipeline(id),null
+public,pipelines,pipelines_update,PERMISSIVE,{authenticated},UPDATE,"private.has_permission(organization_id, 'pipelines.manage'::text)","private.has_permission(organization_id, 'pipelines.manage'::text)"
+public,profiles,profiles_select,PERMISSIVE,{authenticated},SELECT,private.shares_organization_with(id),null
+public,profiles,profiles_update,PERMISSIVE,{authenticated},UPDATE,((id = ( SELECT auth.uid() AS uid)) OR private.is_platform_admin()),((id = ( SELECT auth.uid() AS uid)) OR private.is_platform_admin())
+public,role_permissions,role_permissions_delete,PERMISSIVE,{authenticated},DELETE,"(EXISTS ( SELECT 1
+   FROM roles
+  WHERE ((roles.id = role_permissions.role_id) AND private.is_organization_admin(roles.organization_id))))",null
+public,role_permissions,role_permissions_insert,PERMISSIVE,{authenticated},INSERT,null,"(EXISTS ( SELECT 1
+   FROM roles
+  WHERE ((roles.id = role_permissions.role_id) AND private.is_organization_admin(roles.organization_id))))"
+public,role_permissions,role_permissions_select,PERMISSIVE,{authenticated},SELECT,"(EXISTS ( SELECT 1
+   FROM roles
+  WHERE ((roles.id = role_permissions.role_id) AND private.is_organization_member(roles.organization_id))))",null
+public,roles,roles_delete,PERMISSIVE,{authenticated},DELETE,private.is_organization_admin(organization_id),null
+public,roles,roles_insert,PERMISSIVE,{authenticated},INSERT,null,private.is_organization_admin(organization_id)
+public,roles,roles_select,PERMISSIVE,{authenticated},SELECT,private.is_organization_member(organization_id),null
+public,roles,roles_update,PERMISSIVE,{authenticated},UPDATE,private.is_organization_admin(organization_id),private.is_organization_admin(organization_id)
+public,tags,tags_delete,PERMISSIVE,{authenticated},DELETE,"private.has_permission(organization_id, 'tags.manage'::text)",null
+public,tags,tags_insert,PERMISSIVE,{authenticated},INSERT,null,"(private.is_organization_member(organization_id) AND (private.has_permission(organization_id, 'tags.create'::text) OR private.has_permission(organization_id, 'tags.manage'::text)))"
+public,tags,tags_select,PERMISSIVE,{authenticated},SELECT,"(private.is_organization_member(organization_id) AND (private.has_permission(organization_id, 'tags.read'::text) OR private.has_permission(organization_id, 'tags.manage'::text)))",null
+public,tags,tags_update,PERMISSIVE,{authenticated},UPDATE,"(private.has_permission(organization_id, 'tags.manage'::text) OR (private.has_permission(organization_id, 'tags.create'::text) AND (created_by = ( SELECT auth.uid() AS uid))))","(private.has_permission(organization_id, 'tags.manage'::text) OR (private.has_permission(organization_id, 'tags.create'::text) AND (created_by = ( SELECT auth.uid() AS uid))))"
+public,task_activity_history,task_activity_history_select,PERMISSIVE,{authenticated},SELECT,private.can_view_task(task_id),null
+public,task_reminders,task_reminders_delete,PERMISSIVE,{authenticated},DELETE,"(private.can_edit_task(task_id) AND ((user_id = ( SELECT auth.uid() AS uid)) OR private.has_permission(organization_id, 'tasks.update_all'::text)))",null
+public,task_reminders,task_reminders_insert,PERMISSIVE,{authenticated},INSERT,null,"(private.can_edit_task(task_id) AND ((user_id = ( SELECT auth.uid() AS uid)) OR private.has_permission(organization_id, 'tasks.update_all'::text)) AND (EXISTS ( SELECT 1
+   FROM tasks task
+  WHERE ((task.id = task_reminders.task_id) AND (task.organization_id = task_reminders.organization_id) AND (task.assigned_to = task_reminders.user_id)))))"
+public,task_reminders,task_reminders_select,PERMISSIVE,{authenticated},SELECT,"((user_id = ( SELECT auth.uid() AS uid)) OR (private.has_permission(organization_id, 'tasks.read_all'::text) AND private.can_view_task(task_id)))",null
+public,task_reminders,task_reminders_update,PERMISSIVE,{authenticated},UPDATE,"(private.can_edit_task(task_id) AND ((user_id = ( SELECT auth.uid() AS uid)) OR private.has_permission(organization_id, 'tasks.update_all'::text)))",private.can_edit_task(task_id)
+public,tasks,tasks_delete,PERMISSIVE,{authenticated},DELETE,private.can_delete_task(id),null
+public,tasks,tasks_insert,PERMISSIVE,{authenticated},INSERT,null,"(private.has_permission(organization_id, 'tasks.create'::text) AND ((assigned_to = ( SELECT auth.uid() AS uid)) OR private.has_permission(organization_id, 'tasks.update_all'::text)) AND ((lead_id IS NULL) OR private.can_view_lead(lead_id)))"
+public,tasks,tasks_select,PERMISSIVE,{authenticated},SELECT,private.can_view_task(id),null
+public,tasks,tasks_update,PERMISSIVE,{authenticated},UPDATE,private.can_edit_task(id),private.is_organization_member(organization_id)
+storage,objects,CRM WhatsApp media select,PERMISSIVE,{authenticated},SELECT,((bucket_id = 'crm-whatsapp-media'::text) AND private.can_read_crm_whatsapp_media(name)),null

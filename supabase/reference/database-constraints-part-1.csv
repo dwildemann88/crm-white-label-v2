@@ -1,0 +1,101 @@
+schema_name,table_name,constraint_name,constraint_type,definition
+public,contacts,contacts_full_name_check,CHECK,CHECK (char_length(TRIM(BOTH FROM full_name)) >= 2 AND char_length(TRIM(BOTH FROM full_name)) <= 150)
+public,contacts,contacts_state_check,CHECK,CHECK (state IS NULL OR state ~ '^[A-Z]{2}$'::text)
+public,contacts,contacts_created_by_fkey,FOREIGN KEY,FOREIGN KEY (created_by) REFERENCES profiles(id) ON DELETE SET NULL
+public,contacts,contacts_organization_id_fkey,FOREIGN KEY,FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE
+public,contacts,contacts_pkey,PRIMARY KEY,PRIMARY KEY (id)
+public,contacts,contacts_organization_id_id_unique,UNIQUE,"UNIQUE (organization_id, id)"
+public,conversation_assignment_history,conversation_assignment_history_changed_by_fkey,FOREIGN KEY,FOREIGN KEY (changed_by) REFERENCES profiles(id) ON DELETE SET NULL
+public,conversation_assignment_history,conversation_assignment_history_conversation_fk,FOREIGN KEY,"FOREIGN KEY (organization_id, conversation_id) REFERENCES conversations(organization_id, id) ON DELETE CASCADE"
+public,conversation_assignment_history,conversation_assignment_history_new_user_id_fkey,FOREIGN KEY,FOREIGN KEY (new_user_id) REFERENCES profiles(id) ON DELETE SET NULL
+public,conversation_assignment_history,conversation_assignment_history_previous_user_id_fkey,FOREIGN KEY,FOREIGN KEY (previous_user_id) REFERENCES profiles(id) ON DELETE SET NULL
+public,conversation_assignment_history,conversation_assignment_history_pkey,PRIMARY KEY,PRIMARY KEY (id)
+public,conversation_user_state,conversation_user_state_conversation_fk,FOREIGN KEY,"FOREIGN KEY (organization_id, conversation_id) REFERENCES conversations(organization_id, id) ON DELETE CASCADE"
+public,conversation_user_state,conversation_user_state_member_fk,FOREIGN KEY,"FOREIGN KEY (organization_id, user_id) REFERENCES organization_members(organization_id, user_id) ON DELETE CASCADE"
+public,conversation_user_state,conversation_user_state_pkey,PRIMARY KEY,PRIMARY KEY (id)
+public,conversation_user_state,conversation_user_state_unique,UNIQUE,"UNIQUE (conversation_id, user_id)"
+public,conversations,conversations_channel_check,CHECK,"CHECK (channel = ANY (ARRAY['whatsapp'::text, 'email'::text, 'sms'::text, 'internal'::text, 'other'::text]))"
+public,conversations,conversations_last_message_direction_check,CHECK,"CHECK (last_message_direction IS NULL OR (last_message_direction = ANY (ARRAY['inbound'::text, 'outbound'::text, 'internal'::text])))"
+public,conversations,conversations_priority_check,CHECK,"CHECK (priority = ANY (ARRAY['low'::text, 'medium'::text, 'high'::text, 'urgent'::text]))"
+public,conversations,conversations_status_check,CHECK,"CHECK (status = ANY (ARRAY['open'::text, 'pending'::text, 'resolved'::text, 'archived'::text]))"
+public,conversations,conversations_assigned_member,FOREIGN KEY,"FOREIGN KEY (organization_id, assigned_to) REFERENCES organization_members(organization_id, user_id) ON DELETE RESTRICT"
+public,conversations,conversations_contact_same_organization,FOREIGN KEY,"FOREIGN KEY (organization_id, contact_id) REFERENCES contacts(organization_id, id) ON DELETE RESTRICT"
+public,conversations,conversations_created_by_fkey,FOREIGN KEY,FOREIGN KEY (created_by) REFERENCES profiles(id) ON DELETE SET NULL
+public,conversations,conversations_lead_same_organization,FOREIGN KEY,"FOREIGN KEY (organization_id, lead_id) REFERENCES leads(organization_id, id) ON DELETE SET NULL"
+public,conversations,conversations_updated_by_fkey,FOREIGN KEY,FOREIGN KEY (updated_by) REFERENCES profiles(id) ON DELETE SET NULL
+public,conversations,conversations_pkey,PRIMARY KEY,PRIMARY KEY (id)
+public,conversations,conversations_organization_id_id_unique,UNIQUE,"UNIQUE (organization_id, id)"
+public,custom_field_options,custom_field_options_color_check,CHECK,CHECK (color IS NULL OR color ~ '^#[0-9A-Fa-f]{6}$'::text)
+public,custom_field_options,custom_field_options_label_check,CHECK,CHECK (char_length(TRIM(BOTH FROM label)) >= 1 AND char_length(TRIM(BOTH FROM label)) <= 100)
+public,custom_field_options,custom_field_options_position_check,CHECK,"CHECK (""position"" >= 1)"
+public,custom_field_options,custom_field_options_value_check,CHECK,CHECK (char_length(TRIM(BOTH FROM value)) >= 1 AND char_length(TRIM(BOTH FROM value)) <= 100)
+public,custom_field_options,custom_field_options_created_by_fkey,FOREIGN KEY,FOREIGN KEY (created_by) REFERENCES profiles(id) ON DELETE SET NULL
+public,custom_field_options,custom_field_options_field_same_organization,FOREIGN KEY,"FOREIGN KEY (organization_id, field_id) REFERENCES custom_fields(organization_id, id) ON DELETE CASCADE"
+public,custom_field_options,custom_field_options_pkey,PRIMARY KEY,PRIMARY KEY (id)
+public,custom_field_options,custom_field_options_position_unique,UNIQUE,"UNIQUE (field_id, ""position"")"
+public,custom_field_options,custom_field_options_value_unique,UNIQUE,"UNIQUE (field_id, value)"
+public,custom_fields,custom_fields_code_check,CHECK,CHECK (code ~ '^[a-z0-9_]+$'::text)
+public,custom_fields,custom_fields_config_check,CHECK,CHECK (jsonb_typeof(config) = 'object'::text)
+public,custom_fields,custom_fields_field_type_check,CHECK,"CHECK (field_type = ANY (ARRAY['text'::text, 'textarea'::text, 'number'::text, 'currency'::text, 'boolean'::text, 'date'::text, 'datetime'::text, 'select'::text, 'multiselect'::text, 'phone'::text, 'email'::text, 'url'::text, 'user'::text]))"
+public,custom_fields,custom_fields_name_check,CHECK,CHECK (char_length(TRIM(BOTH FROM name)) >= 2 AND char_length(TRIM(BOTH FROM name)) <= 100)
+public,custom_fields,custom_fields_position_check,CHECK,"CHECK (""position"" >= 1)"
+public,custom_fields,custom_fields_created_by_fkey,FOREIGN KEY,FOREIGN KEY (created_by) REFERENCES profiles(id) ON DELETE SET NULL
+public,custom_fields,custom_fields_organization_id_fkey,FOREIGN KEY,FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE
+public,custom_fields,custom_fields_pipeline_same_organization,FOREIGN KEY,"FOREIGN KEY (organization_id, pipeline_id) REFERENCES pipelines(organization_id, id) ON DELETE CASCADE"
+public,custom_fields,custom_fields_pkey,PRIMARY KEY,PRIMARY KEY (id)
+public,custom_fields,custom_fields_organization_code_unique,UNIQUE,"UNIQUE (organization_id, code)"
+public,custom_fields,custom_fields_organization_id_id_unique,UNIQUE,"UNIQUE (organization_id, id)"
+public,lead_assignment_history,lead_assignment_history_changed_by_fkey,FOREIGN KEY,FOREIGN KEY (changed_by) REFERENCES profiles(id) ON DELETE SET NULL
+public,lead_assignment_history,lead_assignment_history_lead_fk,FOREIGN KEY,"FOREIGN KEY (organization_id, lead_id) REFERENCES leads(organization_id, id) ON DELETE CASCADE"
+public,lead_assignment_history,lead_assignment_history_new_user_id_fkey,FOREIGN KEY,FOREIGN KEY (new_user_id) REFERENCES profiles(id) ON DELETE SET NULL
+public,lead_assignment_history,lead_assignment_history_previous_user_id_fkey,FOREIGN KEY,FOREIGN KEY (previous_user_id) REFERENCES profiles(id) ON DELETE SET NULL
+public,lead_assignment_history,lead_assignment_history_pkey,PRIMARY KEY,PRIMARY KEY (id)
+public,lead_custom_values,lead_custom_values_one_value_only,CHECK,"CHECK (num_nonnulls(value_text, value_number, value_boolean, value_date, value_timestamp, value_json) = 1)"
+public,lead_custom_values,lead_custom_values_created_by_fkey,FOREIGN KEY,FOREIGN KEY (created_by) REFERENCES profiles(id) ON DELETE SET NULL
+public,lead_custom_values,lead_custom_values_field_same_organization,FOREIGN KEY,"FOREIGN KEY (organization_id, field_id) REFERENCES custom_fields(organization_id, id) ON DELETE CASCADE"
+public,lead_custom_values,lead_custom_values_lead_same_organization,FOREIGN KEY,"FOREIGN KEY (organization_id, lead_id) REFERENCES leads(organization_id, id) ON DELETE CASCADE"
+public,lead_custom_values,lead_custom_values_updated_by_fkey,FOREIGN KEY,FOREIGN KEY (updated_by) REFERENCES profiles(id) ON DELETE SET NULL
+public,lead_custom_values,lead_custom_values_pkey,PRIMARY KEY,PRIMARY KEY (id)
+public,lead_custom_values,lead_custom_values_unique,UNIQUE,"UNIQUE (lead_id, field_id)"
+public,lead_notes,lead_notes_body_length,CHECK,CHECK (char_length(body) <= 10000)
+public,lead_notes,lead_notes_body_not_empty,CHECK,CHECK (char_length(btrim(body)) > 0)
+public,lead_notes,lead_notes_author_id_fkey,FOREIGN KEY,FOREIGN KEY (author_id) REFERENCES profiles(id) ON DELETE SET NULL
+public,lead_notes,lead_notes_lead_id_fkey,FOREIGN KEY,FOREIGN KEY (lead_id) REFERENCES leads(id) ON DELETE CASCADE
+public,lead_notes,lead_notes_organization_id_fkey,FOREIGN KEY,FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE
+public,lead_notes,lead_notes_pkey,PRIMARY KEY,PRIMARY KEY (id)
+public,lead_shares,lead_shares_access_level_check,CHECK,"CHECK (access_level = ANY (ARRAY['view'::text, 'edit'::text]))"
+public,lead_shares,lead_shares_created_by_fkey,FOREIGN KEY,FOREIGN KEY (created_by) REFERENCES profiles(id) ON DELETE SET NULL
+public,lead_shares,lead_shares_lead_fk,FOREIGN KEY,"FOREIGN KEY (organization_id, lead_id) REFERENCES leads(organization_id, id) ON DELETE CASCADE"
+public,lead_shares,lead_shares_member_fk,FOREIGN KEY,"FOREIGN KEY (organization_id, user_id) REFERENCES organization_members(organization_id, user_id) ON DELETE CASCADE"
+public,lead_shares,lead_shares_pkey,PRIMARY KEY,PRIMARY KEY (id)
+public,lead_shares,lead_shares_unique,UNIQUE,"UNIQUE (lead_id, user_id)"
+public,lead_sources,lead_sources_code_check,CHECK,CHECK (code ~ '^[a-z0-9_]+$'::text)
+public,lead_sources,lead_sources_name_check,CHECK,CHECK (char_length(TRIM(BOTH FROM name)) >= 2 AND char_length(TRIM(BOTH FROM name)) <= 100)
+public,lead_sources,lead_sources_platform_check,CHECK,"CHECK (platform = ANY (ARRAY['manual'::text, 'meta'::text, 'google'::text, 'website'::text, 'whatsapp'::text, 'referral'::text, 'other'::text]))"
+public,lead_sources,lead_sources_created_by_fkey,FOREIGN KEY,FOREIGN KEY (created_by) REFERENCES profiles(id) ON DELETE SET NULL
+public,lead_sources,lead_sources_organization_id_fkey,FOREIGN KEY,FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE
+public,lead_sources,lead_sources_pkey,PRIMARY KEY,PRIMARY KEY (id)
+public,lead_sources,lead_sources_organization_code_unique,UNIQUE,"UNIQUE (organization_id, code)"
+public,lead_sources,lead_sources_organization_id_id_unique,UNIQUE,"UNIQUE (organization_id, id)"
+public,lead_stage_history,lead_stage_history_duration_seconds_check,CHECK,CHECK (duration_seconds IS NULL OR duration_seconds >= 0)
+public,lead_stage_history,lead_stage_history_entered_by_fkey,FOREIGN KEY,FOREIGN KEY (entered_by) REFERENCES profiles(id) ON DELETE SET NULL
+public,lead_stage_history,lead_stage_history_lead_fk,FOREIGN KEY,"FOREIGN KEY (organization_id, lead_id) REFERENCES leads(organization_id, id) ON DELETE CASCADE"
+public,lead_stage_history,lead_stage_history_pipeline_fk,FOREIGN KEY,"FOREIGN KEY (organization_id, pipeline_id) REFERENCES pipelines(organization_id, id) ON DELETE RESTRICT"
+public,lead_stage_history,lead_stage_history_stage_fk,FOREIGN KEY,"FOREIGN KEY (organization_id, pipeline_id, stage_id) REFERENCES pipeline_stages(organization_id, pipeline_id, id) ON DELETE RESTRICT"
+public,lead_stage_history,lead_stage_history_pkey,PRIMARY KEY,PRIMARY KEY (id)
+public,lead_tags,lead_tags_assigned_by_fkey,FOREIGN KEY,FOREIGN KEY (assigned_by) REFERENCES profiles(id) ON DELETE SET NULL
+public,lead_tags,lead_tags_lead_same_organization,FOREIGN KEY,"FOREIGN KEY (organization_id, lead_id) REFERENCES leads(organization_id, id) ON DELETE CASCADE"
+public,lead_tags,lead_tags_tag_same_organization,FOREIGN KEY,"FOREIGN KEY (organization_id, tag_id) REFERENCES tags(organization_id, id) ON DELETE CASCADE"
+public,lead_tags,lead_tags_pkey,PRIMARY KEY,PRIMARY KEY (id)
+public,lead_tags,lead_tags_unique,UNIQUE,"UNIQUE (lead_id, tag_id)"
+public,leads,leads_estimated_value_check,CHECK,CHECK (estimated_value IS NULL OR estimated_value >= 0::numeric)
+public,leads,leads_monthly_bill_check,CHECK,CHECK (monthly_bill IS NULL OR monthly_bill >= 0::numeric)
+public,leads,leads_priority_check,CHECK,"CHECK (priority = ANY (ARRAY['low'::text, 'medium'::text, 'high'::text, 'urgent'::text]))"
+public,leads,leads_raw_payload_check,CHECK,CHECK (jsonb_typeof(raw_payload) = 'object'::text)
+public,leads,leads_score_check,CHECK,CHECK (score >= 0 AND score <= 100)
+public,leads,leads_source_metadata_check,CHECK,CHECK (jsonb_typeof(source_metadata) = 'object'::text)
+public,leads,leads_status_check,CHECK,"CHECK (status = ANY (ARRAY['open'::text, 'won'::text, 'lost'::text]))"
+public,leads,leads_temperature_check,CHECK,"CHECK (temperature = ANY (ARRAY['cold'::text, 'warm'::text, 'hot'::text]))"
+public,leads,leads_title_check,CHECK,CHECK (title IS NULL OR char_length(TRIM(BOTH FROM title)) >= 2 AND char_length(TRIM(BOTH FROM title)) <= 180)
+public,leads,leads_assigned_member_fk,FOREIGN KEY,"FOREIGN KEY (organization_id, assigned_to) REFERENCES organization_members(organization_id, user_id) ON DELETE RESTRICT"
+public,leads,leads_created_by_fkey,FOREIGN KEY,FOREIGN KEY (created_by) REFERENCES profiles(id) ON DELETE SET NULL

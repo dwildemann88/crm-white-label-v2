@@ -1,0 +1,101 @@
+schemaname,tablename,indexname,indexdef
+public,contacts,contacts_email_normalized_idx,"CREATE INDEX contacts_email_normalized_idx ON public.contacts USING btree (organization_id, email_normalized) WHERE (email_normalized IS NOT NULL)"
+public,contacts,contacts_full_name_idx,"CREATE INDEX contacts_full_name_idx ON public.contacts USING btree (organization_id, lower(full_name))"
+public,contacts,contacts_organization_id_id_unique,"CREATE UNIQUE INDEX contacts_organization_id_id_unique ON public.contacts USING btree (organization_id, id)"
+public,contacts,contacts_organization_idx,CREATE INDEX contacts_organization_idx ON public.contacts USING btree (organization_id)
+public,contacts,contacts_phone_normalized_idx,"CREATE INDEX contacts_phone_normalized_idx ON public.contacts USING btree (organization_id, phone_normalized) WHERE (phone_normalized IS NOT NULL)"
+public,contacts,contacts_pkey,CREATE UNIQUE INDEX contacts_pkey ON public.contacts USING btree (id)
+public,conversation_assignment_history,conversation_assignment_history_idx,"CREATE INDEX conversation_assignment_history_idx ON public.conversation_assignment_history USING btree (conversation_id, changed_at DESC)"
+public,conversation_assignment_history,conversation_assignment_history_pkey,CREATE UNIQUE INDEX conversation_assignment_history_pkey ON public.conversation_assignment_history USING btree (id)
+public,conversation_user_state,conversation_user_state_pkey,CREATE UNIQUE INDEX conversation_user_state_pkey ON public.conversation_user_state USING btree (id)
+public,conversation_user_state,conversation_user_state_unique,"CREATE UNIQUE INDEX conversation_user_state_unique ON public.conversation_user_state USING btree (conversation_id, user_id)"
+public,conversation_user_state,conversation_user_state_user_idx,"CREATE INDEX conversation_user_state_user_idx ON public.conversation_user_state USING btree (organization_id, user_id)"
+public,conversations,conversations_assigned_idx,"CREATE INDEX conversations_assigned_idx ON public.conversations USING btree (organization_id, assigned_to, status)"
+public,conversations,conversations_contact_idx,"CREATE INDEX conversations_contact_idx ON public.conversations USING btree (organization_id, contact_id)"
+public,conversations,conversations_external_identity_unique_idx,"CREATE UNIQUE INDEX conversations_external_identity_unique_idx ON public.conversations USING btree (organization_id, channel, external_account_id, external_contact_id) WHERE ((external_account_id IS NOT NULL) AND (external_contact_id IS NOT NULL))"
+public,conversations,conversations_lead_idx,"CREATE INDEX conversations_lead_idx ON public.conversations USING btree (organization_id, lead_id) WHERE (lead_id IS NOT NULL)"
+public,conversations,conversations_organization_id_id_unique,"CREATE UNIQUE INDEX conversations_organization_id_id_unique ON public.conversations USING btree (organization_id, id)"
+public,conversations,conversations_organization_status_idx,"CREATE INDEX conversations_organization_status_idx ON public.conversations USING btree (organization_id, status, last_message_at DESC)"
+public,conversations,conversations_pkey,CREATE UNIQUE INDEX conversations_pkey ON public.conversations USING btree (id)
+public,custom_field_options,custom_field_options_field_idx,"CREATE INDEX custom_field_options_field_idx ON public.custom_field_options USING btree (field_id, ""position"")"
+public,custom_field_options,custom_field_options_pkey,CREATE UNIQUE INDEX custom_field_options_pkey ON public.custom_field_options USING btree (id)
+public,custom_field_options,custom_field_options_position_unique,"CREATE UNIQUE INDEX custom_field_options_position_unique ON public.custom_field_options USING btree (field_id, ""position"")"
+public,custom_field_options,custom_field_options_value_unique,"CREATE UNIQUE INDEX custom_field_options_value_unique ON public.custom_field_options USING btree (field_id, value)"
+public,custom_fields,custom_fields_organization_active_idx,"CREATE INDEX custom_fields_organization_active_idx ON public.custom_fields USING btree (organization_id, is_active, ""position"")"
+public,custom_fields,custom_fields_organization_code_unique,"CREATE UNIQUE INDEX custom_fields_organization_code_unique ON public.custom_fields USING btree (organization_id, code)"
+public,custom_fields,custom_fields_organization_id_id_unique,"CREATE UNIQUE INDEX custom_fields_organization_id_id_unique ON public.custom_fields USING btree (organization_id, id)"
+public,custom_fields,custom_fields_pipeline_idx,"CREATE INDEX custom_fields_pipeline_idx ON public.custom_fields USING btree (organization_id, pipeline_id, ""position"")"
+public,custom_fields,custom_fields_pkey,CREATE UNIQUE INDEX custom_fields_pkey ON public.custom_fields USING btree (id)
+public,lead_assignment_history,lead_assignment_history_lead_idx,"CREATE INDEX lead_assignment_history_lead_idx ON public.lead_assignment_history USING btree (lead_id, changed_at DESC)"
+public,lead_assignment_history,lead_assignment_history_pkey,CREATE UNIQUE INDEX lead_assignment_history_pkey ON public.lead_assignment_history USING btree (id)
+public,lead_custom_values,lead_custom_values_field_idx,"CREATE INDEX lead_custom_values_field_idx ON public.lead_custom_values USING btree (organization_id, field_id)"
+public,lead_custom_values,lead_custom_values_lead_idx,"CREATE INDEX lead_custom_values_lead_idx ON public.lead_custom_values USING btree (organization_id, lead_id)"
+public,lead_custom_values,lead_custom_values_number_idx,"CREATE INDEX lead_custom_values_number_idx ON public.lead_custom_values USING btree (organization_id, field_id, value_number) WHERE (value_number IS NOT NULL)"
+public,lead_custom_values,lead_custom_values_pkey,CREATE UNIQUE INDEX lead_custom_values_pkey ON public.lead_custom_values USING btree (id)
+public,lead_custom_values,lead_custom_values_text_idx,"CREATE INDEX lead_custom_values_text_idx ON public.lead_custom_values USING btree (organization_id, field_id, value_text) WHERE (value_text IS NOT NULL)"
+public,lead_custom_values,lead_custom_values_unique,"CREATE UNIQUE INDEX lead_custom_values_unique ON public.lead_custom_values USING btree (lead_id, field_id)"
+public,lead_notes,lead_notes_lead_created_at_idx,"CREATE INDEX lead_notes_lead_created_at_idx ON public.lead_notes USING btree (lead_id, created_at DESC)"
+public,lead_notes,lead_notes_organization_id_idx,CREATE INDEX lead_notes_organization_id_idx ON public.lead_notes USING btree (organization_id)
+public,lead_notes,lead_notes_pkey,CREATE UNIQUE INDEX lead_notes_pkey ON public.lead_notes USING btree (id)
+public,lead_shares,lead_shares_lead_idx,"CREATE INDEX lead_shares_lead_idx ON public.lead_shares USING btree (organization_id, lead_id)"
+public,lead_shares,lead_shares_pkey,CREATE UNIQUE INDEX lead_shares_pkey ON public.lead_shares USING btree (id)
+public,lead_shares,lead_shares_unique,"CREATE UNIQUE INDEX lead_shares_unique ON public.lead_shares USING btree (lead_id, user_id)"
+public,lead_shares,lead_shares_user_idx,"CREATE INDEX lead_shares_user_idx ON public.lead_shares USING btree (organization_id, user_id)"
+public,lead_sources,lead_sources_organization_active_idx,"CREATE INDEX lead_sources_organization_active_idx ON public.lead_sources USING btree (organization_id, is_active)"
+public,lead_sources,lead_sources_organization_code_unique,"CREATE UNIQUE INDEX lead_sources_organization_code_unique ON public.lead_sources USING btree (organization_id, code)"
+public,lead_sources,lead_sources_organization_id_id_unique,"CREATE UNIQUE INDEX lead_sources_organization_id_id_unique ON public.lead_sources USING btree (organization_id, id)"
+public,lead_sources,lead_sources_pkey,CREATE UNIQUE INDEX lead_sources_pkey ON public.lead_sources USING btree (id)
+public,lead_stage_history,lead_stage_history_lead_entered_idx,"CREATE INDEX lead_stage_history_lead_entered_idx ON public.lead_stage_history USING btree (lead_id, entered_at DESC)"
+public,lead_stage_history,lead_stage_history_one_open_idx,CREATE UNIQUE INDEX lead_stage_history_one_open_idx ON public.lead_stage_history USING btree (lead_id) WHERE (exited_at IS NULL)
+public,lead_stage_history,lead_stage_history_pkey,CREATE UNIQUE INDEX lead_stage_history_pkey ON public.lead_stage_history USING btree (id)
+public,lead_stage_history,lead_stage_history_stage_idx,"CREATE INDEX lead_stage_history_stage_idx ON public.lead_stage_history USING btree (organization_id, stage_id, entered_at)"
+public,lead_tags,lead_tags_lead_idx,"CREATE INDEX lead_tags_lead_idx ON public.lead_tags USING btree (organization_id, lead_id)"
+public,lead_tags,lead_tags_pkey,CREATE UNIQUE INDEX lead_tags_pkey ON public.lead_tags USING btree (id)
+public,lead_tags,lead_tags_tag_idx,"CREATE INDEX lead_tags_tag_idx ON public.lead_tags USING btree (organization_id, tag_id)"
+public,lead_tags,lead_tags_unique,"CREATE UNIQUE INDEX lead_tags_unique ON public.lead_tags USING btree (lead_id, tag_id)"
+public,leads,leads_external_id_unique_idx,"CREATE UNIQUE INDEX leads_external_id_unique_idx ON public.leads USING btree (organization_id, source_id, external_lead_id) WHERE ((external_lead_id IS NOT NULL) AND (btrim(external_lead_id) <> ''::text))"
+public,leads,leads_organization_assigned_idx,"CREATE INDEX leads_organization_assigned_idx ON public.leads USING btree (organization_id, assigned_to)"
+public,leads,leads_organization_contact_idx,"CREATE INDEX leads_organization_contact_idx ON public.leads USING btree (organization_id, contact_id)"
+public,leads,leads_organization_created_idx,"CREATE INDEX leads_organization_created_idx ON public.leads USING btree (organization_id, created_at DESC)"
+public,leads,leads_organization_id_id_unique,"CREATE UNIQUE INDEX leads_organization_id_id_unique ON public.leads USING btree (organization_id, id)"
+public,leads,leads_organization_priority_idx,"CREATE INDEX leads_organization_priority_idx ON public.leads USING btree (organization_id, priority)"
+public,leads,leads_organization_source_idx,"CREATE INDEX leads_organization_source_idx ON public.leads USING btree (organization_id, source_id)"
+public,leads,leads_organization_stage_idx,"CREATE INDEX leads_organization_stage_idx ON public.leads USING btree (organization_id, pipeline_id, stage_id)"
+public,leads,leads_organization_status_idx,"CREATE INDEX leads_organization_status_idx ON public.leads USING btree (organization_id, status)"
+public,leads,leads_pkey,CREATE UNIQUE INDEX leads_pkey ON public.leads USING btree (id)
+public,messages,messages_conversation_direction_sent_at_idx,"CREATE INDEX messages_conversation_direction_sent_at_idx ON public.messages USING btree (conversation_id, direction, sent_at DESC)"
+public,messages,messages_conversation_sent_idx,"CREATE INDEX messages_conversation_sent_idx ON public.messages USING btree (conversation_id, sent_at)"
+public,messages,messages_external_message_unique_idx,"CREATE UNIQUE INDEX messages_external_message_unique_idx ON public.messages USING btree (organization_id, external_message_id) WHERE ((external_message_id IS NOT NULL) AND (btrim(external_message_id) <> ''::text))"
+public,messages,messages_organization_id_id_unique,"CREATE UNIQUE INDEX messages_organization_id_id_unique ON public.messages USING btree (organization_id, id)"
+public,messages,messages_pkey,CREATE UNIQUE INDEX messages_pkey ON public.messages USING btree (id)
+public,messages,messages_sender_idx,"CREATE INDEX messages_sender_idx ON public.messages USING btree (organization_id, sender_user_id, sent_at DESC) WHERE (sender_user_id IS NOT NULL)"
+public,notifications,notifications_pkey,CREATE UNIQUE INDEX notifications_pkey ON public.notifications USING btree (id)
+public,notifications,notifications_user_created_idx,"CREATE INDEX notifications_user_created_idx ON public.notifications USING btree (organization_id, user_id, created_at DESC)"
+public,notifications,notifications_user_unread_idx,"CREATE INDEX notifications_user_unread_idx ON public.notifications USING btree (organization_id, user_id, created_at DESC) WHERE (read_at IS NULL)"
+public,organization_branding,organization_branding_pkey,CREATE UNIQUE INDEX organization_branding_pkey ON public.organization_branding USING btree (organization_id)
+public,organization_members,organization_members_organization_id_idx,CREATE INDEX organization_members_organization_id_idx ON public.organization_members USING btree (organization_id)
+public,organization_members,organization_members_pkey,CREATE UNIQUE INDEX organization_members_pkey ON public.organization_members USING btree (id)
+public,organization_members,organization_members_unique,"CREATE UNIQUE INDEX organization_members_unique ON public.organization_members USING btree (organization_id, user_id)"
+public,organization_members,organization_members_user_id_idx,CREATE INDEX organization_members_user_id_idx ON public.organization_members USING btree (user_id)
+public,organizations,organizations_pkey,CREATE UNIQUE INDEX organizations_pkey ON public.organizations USING btree (id)
+public,organizations,organizations_slug_key,CREATE UNIQUE INDEX organizations_slug_key ON public.organizations USING btree (slug)
+public,permissions,permissions_code_key,CREATE UNIQUE INDEX permissions_code_key ON public.permissions USING btree (code)
+public,permissions,permissions_pkey,CREATE UNIQUE INDEX permissions_pkey ON public.permissions USING btree (id)
+public,pipeline_stage_user_access,pipeline_stage_user_access_pkey,CREATE UNIQUE INDEX pipeline_stage_user_access_pkey ON public.pipeline_stage_user_access USING btree (id)
+public,pipeline_stage_user_access,pipeline_stage_user_access_stage_idx,CREATE INDEX pipeline_stage_user_access_stage_idx ON public.pipeline_stage_user_access USING btree (stage_id)
+public,pipeline_stage_user_access,pipeline_stage_user_access_user_idx,CREATE INDEX pipeline_stage_user_access_user_idx ON public.pipeline_stage_user_access USING btree (user_id)
+public,pipeline_stage_user_access,stage_user_access_unique,"CREATE UNIQUE INDEX stage_user_access_unique ON public.pipeline_stage_user_access USING btree (stage_id, user_id)"
+public,pipeline_stages,pipeline_stages_org_pipeline_id_unique,"CREATE UNIQUE INDEX pipeline_stages_org_pipeline_id_unique ON public.pipeline_stages USING btree (organization_id, pipeline_id, id)"
+public,pipeline_stages,pipeline_stages_organization_id_id_unique,"CREATE UNIQUE INDEX pipeline_stages_organization_id_id_unique ON public.pipeline_stages USING btree (organization_id, id)"
+public,pipeline_stages,pipeline_stages_pipeline_code_unique,"CREATE UNIQUE INDEX pipeline_stages_pipeline_code_unique ON public.pipeline_stages USING btree (pipeline_id, code)"
+public,pipeline_stages,pipeline_stages_pipeline_position_idx,"CREATE INDEX pipeline_stages_pipeline_position_idx ON public.pipeline_stages USING btree (pipeline_id, ""position"")"
+public,pipeline_stages,pipeline_stages_pipeline_position_unique,"CREATE UNIQUE INDEX pipeline_stages_pipeline_position_unique ON public.pipeline_stages USING btree (pipeline_id, ""position"")"
+public,pipeline_stages,pipeline_stages_pkey,CREATE UNIQUE INDEX pipeline_stages_pkey ON public.pipeline_stages USING btree (id)
+public,pipeline_user_access,pipeline_user_access_pipeline_idx,CREATE INDEX pipeline_user_access_pipeline_idx ON public.pipeline_user_access USING btree (pipeline_id)
+public,pipeline_user_access,pipeline_user_access_pkey,CREATE UNIQUE INDEX pipeline_user_access_pkey ON public.pipeline_user_access USING btree (id)
+public,pipeline_user_access,pipeline_user_access_unique,"CREATE UNIQUE INDEX pipeline_user_access_unique ON public.pipeline_user_access USING btree (pipeline_id, user_id)"
+public,pipeline_user_access,pipeline_user_access_user_idx,CREATE INDEX pipeline_user_access_user_idx ON public.pipeline_user_access USING btree (user_id)
+public,pipelines,pipelines_one_default_per_organization_idx,CREATE UNIQUE INDEX pipelines_one_default_per_organization_idx ON public.pipelines USING btree (organization_id) WHERE (is_default = true)
+public,pipelines,pipelines_organization_id_id_unique,"CREATE UNIQUE INDEX pipelines_organization_id_id_unique ON public.pipelines USING btree (organization_id, id)"
+public,pipelines,pipelines_organization_slug_unique,"CREATE UNIQUE INDEX pipelines_organization_slug_unique ON public.pipelines USING btree (organization_id, slug)"
+public,pipelines,pipelines_organization_status_idx,"CREATE INDEX pipelines_organization_status_idx ON public.pipelines USING btree (organization_id, status)"
