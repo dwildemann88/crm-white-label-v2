@@ -79,8 +79,9 @@ export function AdminPage({ onUser, initialPipelineId }: { onUser(id?: string): 
   const isLocal = provider === "local";
   const {
     data,
-    toggleUser,
-    savePipeline,
+  toggleUser,
+  removeUser,
+  savePipeline,
     deletePipeline,
     saveStage,
     deleteStage,
@@ -187,7 +188,24 @@ export function AdminPage({ onUser, initialPipelineId }: { onUser(id?: string): 
   const activeUsers = users.filter((user) => user.active).length;
   const activePipelines = sourcePipelines.filter((pipeline) => pipeline.active).length;
   const configuredFields = sourceFields.filter((field) => field.active).length;
+const removeOrganizationUser = async (user: User) => {
+  if (user.id === data?.session?.userId) {
+    window.alert(
+      "Você não pode remover o próprio acesso à empresa.",
+    );
+    return;
+  }
 
+  const confirmed = window.confirm(
+    `Remover “${user.name}” desta empresa?\n\n` +
+      "A conta continuará existindo no Supabase, mas perderá o acesso a esta organização.\n\n" +
+      "A remoção será bloqueada se ainda houver leads, conversas ou tarefas atribuídos ao usuário.",
+  );
+
+  if (!confirmed) return;
+
+  await removeUser(user.id);
+};
   const addPipeline = async () => {
     if (!data?.session) return;
     const pipeline: Pipeline = {
@@ -517,6 +535,24 @@ export function AdminPage({ onUser, initialPipelineId }: { onUser(id?: string): 
                         >
                           Editar acesso
                         </button>
+                        <button
+  type="button"
+  className="icon-danger"
+  onClick={() =>
+    void removeOrganizationUser(user)
+  }
+  disabled={
+    user.id === data?.session?.userId
+  }
+  aria-label={`Remover ${user.name} da empresa`}
+  title={
+    user.id === data?.session?.userId
+      ? "Você não pode remover o próprio acesso."
+      : "Remover usuário da empresa"
+  }
+>
+  <Trash2 size={16} />
+</button>
                       </div>
                     </article>
                   );

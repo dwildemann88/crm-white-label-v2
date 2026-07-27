@@ -34,8 +34,8 @@ export interface CrmGateway {
   deleteTask(session: Session, taskId: string): Promise<void>;
 
   saveUser(session: Session, input: UserInput): Promise<User>;
-  toggleUser(session: Session, userId: string): Promise<void>;
-
+toggleUser(session: Session, userId: string): Promise<void>;
+removeUser(session: Session, userId: string): Promise<void>;
   savePipeline(session: Session, pipeline: Pipeline): Promise<void>;
   deletePipeline(session: Session, pipelineId: string): Promise<void>;
   saveStage(session: Session, stage: PipelineStage): Promise<void>;

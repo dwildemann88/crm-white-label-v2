@@ -1871,7 +1871,48 @@ if (input.id) {
 
     if (error) throw new Error(error.message);
   }
+  async removeUser(
+    session: Session,
+    userId: string,
+  ): Promise<void> {
+    const { data, error } =
+      await supabase.functions.invoke(
+        "admin-manage-crm-user",
+        {
+          body: {
+            action: "remove",
+            organization_id:
+              session.organizationId,
+            user_id: userId,
+          },
+        },
+      );
 
+    if (error) {
+      throw new Error(
+        await readEdgeFunctionError(
+          error,
+          "Não foi possível remover o usuário.",
+        ),
+      );
+    }
+
+    const result = data as {
+      ok?: boolean;
+      removed?: boolean;
+      user_id?: string;
+    };
+
+    if (
+      result?.ok !== true ||
+      result.removed !== true ||
+      result.user_id !== userId
+    ) {
+      throw new Error(
+        "O servidor não confirmou a remoção do usuário.",
+      );
+    }
+  }
   async savePipeline(session: Session, pipeline: Pipeline): Promise<void> {
     if (pipeline.organizationId !== session.organizationId) {
       throw new Error("O funil não pertence à organização ativa.");

@@ -52,8 +52,9 @@ interface CrmContextValue {
   toggleTask(taskId: string): Promise<void>;
   deleteTask(taskId: string): Promise<void>;
   saveUser(input: UserInput): Promise<void>;
-  toggleUser(userId: string): Promise<void>;
-  savePipeline(pipeline: Pipeline): Promise<void>;
+toggleUser(userId: string): Promise<void>;
+removeUser(userId: string): Promise<void>;
+savePipeline(pipeline: Pipeline): Promise<void>;
   deletePipeline(pipelineId: string): Promise<void>;
   saveStage(stage: PipelineStage): Promise<void>;
   deleteStage(stageId: string): Promise<void>;
@@ -449,7 +450,12 @@ useEffect(() => {
         "Status do usuário atualizado.",
       );
     },
-
+removeUser(userId) {
+  return execute(
+    () => gateway.removeUser(session!, userId),
+    "Usuário removido da empresa.",
+  );
+},
     savePipeline(pipeline) {
       return execute(
         () => gateway.savePipeline(session!, pipeline),

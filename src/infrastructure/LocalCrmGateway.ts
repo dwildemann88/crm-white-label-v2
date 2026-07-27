@@ -831,7 +831,105 @@ export class LocalCrmGateway implements CrmGateway {
     user.active = !user.active;
     writeDatabase(database);
   }
+  async removeUser(
+    session: Session,
+    userId: string,
+  ): Promise<void> {
+    const database = readDatabase();
+    const actor = currentUser(database, session);
 
+    if (!can(actor, "users.manage")) {
+      throw new Error(
+        "Sem permissão para gerenciar usuários.",
+      );
+    }
+
+    const user = database.users.find(
+      (item) =>
+        item.id === userId &&
+        item.organizationId === session.organizationId,
+    );
+
+    if (!user) {
+      throw new Error("Usuário não encontrado.");
+    }
+
+    if (user.id === actor.id) {
+      throw new Error(
+        "Você não pode remover o próprio usuário.",
+      );
+    }
+
+    if (user.role === "super_admin" && user.active) {
+      const activeAdministrators =
+        database.users.filter(
+          (item) =>
+            item.organizationId ===
+              session.organizationId &&
+            item.role === "super_admin" &&
+            item.active,
+        );
+
+      if (activeAdministrators.length <= 1) {
+        throw new Error(
+          "Não é possível remover o último administrador ativo.",
+        );
+      }
+    }
+
+    const hasAssignedLeads =
+      database.leads.some(
+        (lead) =>
+          lead.organizationId ===
+            session.organizationId &&
+          lead.ownerId === userId,
+      );
+
+    if (hasAssignedLeads) {
+      throw new Error(
+        "Transfira os leads atribuídos antes de remover este usuário.",
+      );
+    }
+
+    const hasAssignedConversations =
+      database.conversations.some(
+        (conversation) =>
+          conversation.organizationId ===
+            session.organizationId &&
+          conversation.ownerId === userId,
+      );
+
+    if (hasAssignedConversations) {
+      throw new Error(
+        "Transfira as conversas atribuídas antes de remover este usuário.",
+      );
+    }
+
+    const hasAssignedTasks =
+      database.tasks.some(
+        (task) =>
+          task.organizationId ===
+            session.organizationId &&
+          task.ownerId === userId,
+      );
+
+    if (hasAssignedTasks) {
+      throw new Error(
+        "Transfira as tarefas atribuídas antes de remover este usuário.",
+      );
+    }
+
+    database.users = database.users.filter(
+      (item) =>
+        !(
+          item.id === userId &&
+          item.organizationId ===
+            session.organizationId
+        ),
+    );
+
+    writeDatabase(database);
+  }
   async savePipeline(session: Session, pipeline: Pipeline) {
     const database = readDatabase();
     const actor = currentUser(database, session);

@@ -159,7 +159,13 @@ export class RestCrmGateway implements CrmGateway {
       session,
     );
   }
-
+removeUser(session: Session, userId: string) {
+  return this.request<void>(
+    `/users/${userId}`,
+    { method: "DELETE" },
+    session,
+  );
+}
   savePipeline(session: Session, pipeline: Pipeline) {
     return this.request<void>(
       `/pipelines/${pipeline.id}`,
