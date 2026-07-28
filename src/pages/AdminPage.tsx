@@ -21,9 +21,11 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { useCrm } from "../app/CrmContext";
 import { Avatar, EmptyState, PanelHead, RoleBadge } from "../components/Common";
+import { leadFieldTypeLabel, normalizeLeadField } from "../core/leadFields";
 import type {
   Branding,
   CustomFieldDefinition,
+  LeadFieldDefinition,
   Pipeline,
   PipelineStage,
   RoleKey,
@@ -85,6 +87,7 @@ export function AdminPage({ onUser, initialPipelineId }: { onUser(id?: string): 
     deletePipeline,
     saveStage,
     deleteStage,
+    saveLeadField,
     saveCustomField,
     deleteCustomField,
     saveTag,
@@ -95,6 +98,9 @@ export function AdminPage({ onUser, initialPipelineId }: { onUser(id?: string): 
 
   const users = data?.users || [];
   const sourcePipelines = data?.pipelines || [];
+  const sourceLeadFields = [...(data?.leadFields || [])].sort(
+    (a, b) => a.position - b.position,
+  );
   const sourceFields = data?.customFields || [];
   const sourceTags = data?.tags || [];
   const organization = data?.organizations.find(
@@ -126,6 +132,8 @@ export function AdminPage({ onUser, initialPipelineId }: { onUser(id?: string): 
     selectedPipeline?.active ?? true,
   );
   const [stages, setStages] = useState<PipelineStage[]>(sourceStages);
+  const [leadFields, setLeadFields] =
+    useState<LeadFieldDefinition[]>(sourceLeadFields);
   const [fields, setFields] = useState<CustomFieldDefinition[]>(sourceFields);
   const [tagDrafts, setTagDrafts] = useState<TagDefinition[]>(sourceTags);
   const [newTag, setNewTag] = useState("");
@@ -164,6 +172,7 @@ export function AdminPage({ onUser, initialPipelineId }: { onUser(id?: string): 
   }, [selectedPipeline]);
 
   useEffect(() => setStages(sourceStages), [sourceStages]);
+  useEffect(() => setLeadFields(sourceLeadFields), [data?.leadFields]);
   useEffect(() => setFields(sourceFields), [sourceFields]);
   useEffect(() => setTagDrafts(sourceTags), [sourceTags]);
   useEffect(() => {
@@ -290,6 +299,47 @@ const removeOrganizationUser = async (user: User) => {
       `Excluir a etapa “${stage.name}”? A operação será bloqueada se houver leads vinculados.`,
     );
     if (confirmed) await deleteStage(stage.id);
+  };
+
+  const changeLeadField = (
+    key: LeadFieldDefinition["key"],
+    patch: Partial<LeadFieldDefinition>,
+  ) => {
+    setLeadFields((old) =>
+      old.map((field) =>
+        field.key === key
+          ? normalizeLeadField({ ...field, ...patch })
+          : field,
+      ),
+    );
+  };
+
+  const moveLeadField = (index: number, direction: -1 | 1) => {
+    const target = index + direction;
+    if (target < 0 || target >= leadFields.length) return;
+
+    const next = [...leadFields];
+    [next[index], next[target]] = [next[target], next[index]];
+
+    setLeadFields(
+      next.map((field, fieldIndex) => ({
+        ...field,
+        position: fieldIndex + 1,
+      })),
+    );
+  };
+
+  const persistLeadFields = async () => {
+    if (leadFields.some((field) => !field.label.trim())) return;
+
+    for (const field of leadFields) {
+      await saveLeadField(
+        normalizeLeadField({
+          ...field,
+          label: field.label.trim(),
+        }),
+      );
+    }
   };
 
   const addField = () => {
@@ -721,6 +771,120 @@ const removeOrganizationUser = async (user: User) => {
 
           {activeSection === "fields" && (
             <div className="admin-section-stack">
+              <section className="panel admin-section-panel">
+                <PanelHead
+                  title="Campos padrão do lead"
+                  subtitle="Altere os nomes, a ordem e a exibição dos campos estruturais sem modificar o banco de dados."
+                  action={
+                    <button
+                      className="primary-button"
+                      onClick={() => void persistLeadFields()}
+                      disabled={leadFields.some((field) => !field.label.trim())}
+                    >
+                      <Save size={16} /> Salvar campos padrão
+                    </button>
+                  }
+                />
+
+                <div className="lead-field-editor-v5">
+                  <div className="lead-field-head">
+                    <span>Ordem</span>
+                    <span>Nome exibido</span>
+                    <span>Campo interno</span>
+                    <span>Tipo</span>
+                    <span>Exibição</span>
+                  </div>
+
+                  {leadFields.map((field, index) => (
+                    <div className="lead-field-row" key={field.key}>
+                      <div className="stage-position-control">
+                        <strong>{index + 1}</strong>
+                        <span>
+                          <button
+                            type="button"
+                            disabled={index === 0}
+                            onClick={() => moveLeadField(index, -1)}
+                            aria-label={`Mover ${field.label} para cima`}
+                          >
+                            <ArrowUp size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            disabled={index === leadFields.length - 1}
+                            onClick={() => moveLeadField(index, 1)}
+                            aria-label={`Mover ${field.label} para baixo`}
+                          >
+                            <ArrowDown size={14} />
+                          </button>
+                        </span>
+                      </div>
+
+                      <input
+                        value={field.label}
+                        onChange={(event) =>
+                          changeLeadField(field.key, {
+                            label: event.target.value,
+                          })
+                        }
+                        aria-label={`Nome exibido de ${field.key}`}
+                      />
+
+                      <code>{field.key}</code>
+                      <span className="lead-field-type">
+                        {leadFieldTypeLabel(field.type)}
+                      </span>
+
+                      <div className="field-visibility-controls">
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={field.active}
+                            disabled={field.locked}
+                            onChange={(event) =>
+                              changeLeadField(field.key, {
+                                active: event.target.checked,
+                              })
+                            }
+                          />
+                          Ativo
+                        </label>
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={field.required}
+                            disabled={field.locked || !field.active}
+                            onChange={(event) =>
+                              changeLeadField(field.key, {
+                                required: event.target.checked,
+                              })
+                            }
+                          />
+                          Obrigatório
+                        </label>
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={field.showInTable}
+                            disabled={!field.active}
+                            onChange={(event) =>
+                              changeLeadField(field.key, {
+                                showInTable: event.target.checked,
+                              })
+                            }
+                          />
+                          Na tabela
+                        </label>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <p className="admin-field-note">
+                  O campo de identificação principal permanece ativo e obrigatório
+                  para preservar a integridade dos contatos e oportunidades.
+                </p>
+              </section>
+
               <section className="panel admin-section-panel">
                 <PanelHead
                   title="Campos personalizados"

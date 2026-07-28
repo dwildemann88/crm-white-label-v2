@@ -15,6 +15,7 @@ import type {
   CustomFieldDefinition,
   IntegrationConnection,
   Lead,
+  LeadFieldDefinition,
   LeadInput,
   Message,
   Organization,
@@ -58,6 +59,7 @@ savePipeline(pipeline: Pipeline): Promise<void>;
   deletePipeline(pipelineId: string): Promise<void>;
   saveStage(stage: PipelineStage): Promise<void>;
   deleteStage(stageId: string): Promise<void>;
+  saveLeadField(field: LeadFieldDefinition): Promise<void>;
   saveCustomField(field: CustomFieldDefinition): Promise<void>;
   deleteCustomField(fieldId: string): Promise<void>;
   saveTag(tag: TagDefinition): Promise<void>;
@@ -478,6 +480,13 @@ removeUser(userId) {
       return execute(
         () => gateway.deleteStage(session!, stageId),
         "Etapa removida.",
+      );
+    },
+
+    saveLeadField(field) {
+      return execute(
+        () => gateway.saveLeadField(session!, field),
+        "Configuração do campo atualizada.",
       );
     },
 

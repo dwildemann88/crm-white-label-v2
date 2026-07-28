@@ -6,6 +6,7 @@ import {
   Clock3,
   Edit3,
   Gauge,
+  Hash,
   Mail,
   MapPin,
   MessageCircle,
@@ -14,11 +15,19 @@ import {
   Tag,
   UserCog,
   X,
+  type LucideIcon,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useCrm } from "../app/CrmContext";
 import { canUserOwnLead } from "../core/crmConsistency";
-import type { CustomFieldDefinition, Lead, TagDefinition } from "../core/types";
+import { resolveLeadFields } from "../core/leadFields";
+import type {
+  CustomFieldDefinition,
+  Lead,
+  LeadFieldDefinition,
+  LeadFieldKey,
+  TagDefinition,
+} from "../core/types";
 import { currency, formatDateTime, uid } from "../core/utils";
 import { Avatar, OriginBadge, PriorityBadge, TagSelector } from "./Common";
 
@@ -27,9 +36,9 @@ function InfoRow({
   label,
   value,
 }: {
-  icon: typeof Phone;
+  icon: LucideIcon;
   label: string;
-  value: string;
+  value: ReactNode;
 }) {
   return (
     <div className="info-row">
@@ -61,6 +70,45 @@ function formatCustomValue(field: CustomFieldDefinition, value: unknown) {
   return String(value);
 }
 
+function fieldValue(lead: Lead, key: LeadFieldKey): ReactNode {
+  switch (key) {
+    case "value":
+      return currency(lead.value);
+    case "score":
+      return `${lead.score}/100`;
+    case "priority":
+      return <PriorityBadge value={lead.priority} />;
+    case "temperature":
+      return (
+        <span className={`temperature-badge temperature-${lead.temperature.toLowerCase()}`}>
+          {lead.temperature}
+        </span>
+      );
+    case "origin":
+      return lead.origin ? <OriginBadge origin={lead.origin} /> : "Não informado";
+    default: {
+      const value = lead[key];
+      return typeof value === "string" && value.trim() ? value : "Não informado";
+    }
+  }
+}
+
+const detailFieldIcons: Partial<Record<LeadFieldKey, LucideIcon>> = {
+  company: BriefcaseBusiness,
+  phone: Phone,
+  email: Mail,
+  city: MapPin,
+  campaign: Gauge,
+};
+
+const detailFieldKeys = new Set<LeadFieldKey>([
+  "company",
+  "phone",
+  "email",
+  "city",
+  "campaign",
+]);
+
 export function LeadDrawer({
   lead,
   onClose,
@@ -91,6 +139,26 @@ export function LeadDrawer({
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [onClose]);
+
+  const organizationId = data?.session?.organizationId || lead.organizationId;
+  const leadFields = useMemo(
+    () => resolveLeadFields(data?.leadFields || [], organizationId),
+    [data?.leadFields, organizationId],
+  );
+  const fieldMap = useMemo(
+    () => new Map(leadFields.map((field) => [field.key, field])),
+    [leadFields],
+  );
+  const activeField = (key: LeadFieldKey) => fieldMap.get(key)?.active === true;
+  const fieldLabel = (key: LeadFieldKey) => fieldMap.get(key)?.label || key;
+  const summaryFieldKeys = new Set<LeadFieldKey>(["value", "score", "priority"]);
+  const summaryFields = leadFields.filter(
+    (field): field is LeadFieldDefinition =>
+      field.active && summaryFieldKeys.has(field.key),
+  );
+  const detailFields = leadFields.filter(
+    (field) => field.active && detailFieldKeys.has(field.key),
+  );
 
   const owner = data?.users.find((item) => item.id === lead.ownerId);
   const pipeline = data?.pipelines.find((item) => item.id === lead.pipelineId);
@@ -140,11 +208,15 @@ export function LeadDrawer({
             </span>
             <div>
               <div className="lead-drawer-kicker">
-                <span className={`temperature-badge temperature-${lead.temperature.toLowerCase()}`}>{lead.temperature}</span>
+                {activeField("temperature") && (
+                  <span className={`temperature-badge temperature-${lead.temperature.toLowerCase()}`}>{lead.temperature}</span>
+                )}
                 <span>{pipeline?.name || "Funil não identificado"}</span>
               </div>
               <h2>{lead.name}</h2>
-              <p>{lead.company || "Sem empresa informada"}</p>
+              {activeField("company") && (
+                <p>{lead.company || `${fieldLabel("company")} não informado`}</p>
+              )}
             </div>
           </div>
           <button className="icon-button subtle" onClick={onClose} aria-label="Fechar painel">
@@ -153,12 +225,12 @@ export function LeadDrawer({
         </header>
 
         <div className="drawer-actions">
-          {can("messages.manage") && (
+          {activeField("phone") && can("messages.manage") && (
             <button
               className="primary-button"
               onClick={onWhatsApp}
               disabled={!lead.phone.trim()}
-              title={lead.phone.trim() ? undefined : "Cadastre um telefone antes de iniciar o WhatsApp"}
+              title={lead.phone.trim() ? undefined : `Cadastre ${fieldLabel("phone").toLowerCase()} antes de iniciar o WhatsApp`}
             >
               <MessageCircle size={17} />
               {existingConversation ? "Abrir conversa" : "Iniciar conversa"}
@@ -177,20 +249,18 @@ export function LeadDrawer({
         </div>
 
         <div className="drawer-body">
-          <section className="drawer-summary">
-            <div>
-              <small>Valor estimado</small>
-              <strong>{currency(lead.value)}</strong>
-            </div>
-            <div>
-              <small>Score comercial</small>
-              <strong>{lead.score}<span>/100</span></strong>
-            </div>
-            <div>
-              <small>Prioridade</small>
-              <PriorityBadge value={lead.priority} />
-            </div>
-          </section>
+          {summaryFields.length > 0 && (
+            <section className="drawer-summary">
+              {summaryFields.map((field) => (
+                <div key={field.id}>
+                  <small>{field.label}</small>
+                  {field.key === "priority"
+                    ? fieldValue(lead, field.key)
+                    : <strong>{fieldValue(lead, field.key)}</strong>}
+                </div>
+              ))}
+            </section>
+          )}
 
           <section className="drawer-section commercial-context">
             <div className="section-title-row">
@@ -222,14 +292,19 @@ export function LeadDrawer({
             )}
           </section>
 
-          <section className="drawer-section info-grid">
-            <InfoRow icon={Phone} label="Telefone" value={lead.phone} />
-            <InfoRow icon={Mail} label="E-mail" value={lead.email} />
-            <InfoRow icon={MapPin} label="Cidade" value={lead.city} />
-            <InfoRow icon={BriefcaseBusiness} label="Empresa" value={lead.company} />
-            <InfoRow icon={Gauge} label="Campanha" value={lead.campaign} />
-            <InfoRow icon={Clock3} label="Última atualização" value={formatDateTime(lead.updatedAt)} />
-          </section>
+          {detailFields.length > 0 && (
+            <section className="drawer-section info-grid">
+              {detailFields.map((field) => (
+                <InfoRow
+                  key={field.id}
+                  icon={detailFieldIcons[field.key] || Hash}
+                  label={field.label}
+                  value={fieldValue(lead, field.key)}
+                />
+              ))}
+              <InfoRow icon={Clock3} label="Última atualização" value={formatDateTime(lead.updatedAt)} />
+            </section>
+          )}
 
           {customFields.length > 0 && (
             <section className="drawer-section">
@@ -249,13 +324,22 @@ export function LeadDrawer({
 
           <section className="drawer-section">
             <div className="section-title-row">
-              <div><h3>Origem e etiquetas</h3><p>Classifique o lead sem misturar origem de aquisição com segmentação.</p></div>
+              <div>
+                <h3>{activeField("origin") || activeField("campaign") ? "Classificação e etiquetas" : "Etiquetas"}</h3>
+                <p>Organize esta oportunidade para facilitar o acompanhamento da equipe.</p>
+              </div>
             </div>
-            <div className="lead-origin-block">
-              <small>Origem</small>
-              <OriginBadge origin={lead.origin} />
-              {lead.campaign && <span>{lead.campaign}</span>}
-            </div>
+            {(activeField("origin") || activeField("campaign")) && (
+              <div className="lead-origin-block">
+                {activeField("origin") && (
+                  <>
+                    <small>{fieldLabel("origin")}</small>
+                    {lead.origin ? <OriginBadge origin={lead.origin} /> : <span>Não informado</span>}
+                  </>
+                )}
+                {activeField("campaign") && lead.campaign && <span>{lead.campaign}</span>}
+              </div>
+            )}
             <div className="lead-tags-block">
               <small>Etiquetas</small>
               <TagSelector available={allTags} value={lead.tags} onChange={toggleTags} colors={tagColors} disabled={!can("leads.write")} />
@@ -277,32 +361,34 @@ export function LeadDrawer({
             )}
           </section>
 
-          <section className="drawer-section">
-            <div className="section-title-row">
-              <div><h3>Observações</h3><p>Contexto comercial registrado pela equipe.</p></div>
-            </div>
-            <div className="notes-box">
-              {lead.notes ? lead.notes.split("\n").map((line, index) => <p key={index}>{line || <br />}</p>) : <p className="muted">Nenhuma observação registrada.</p>}
-            </div>
-            {can("leads.write") && (
-              <div className="note-composer">
-                <textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="Adicione uma observação objetiva para o histórico do lead" />
-                <div>
-                  <span>{note.trim().length ? `${note.trim().length} caracteres` : "A observação ficará registrada na linha do tempo."}</span>
-                  <button
-                    className="primary-button compact"
-                    disabled={!note.trim()}
-                    onClick={async () => {
-                      await addLeadNote(lead.id, note);
-                      setNote("");
-                    }}
-                  >
-                    <Check size={16} /> Registrar
-                  </button>
-                </div>
+          {activeField("notes") && (
+            <section className="drawer-section">
+              <div className="section-title-row">
+                <div><h3>{fieldLabel("notes")}</h3><p>Contexto registrado pela equipe para esta oportunidade.</p></div>
               </div>
-            )}
-          </section>
+              <div className="notes-box">
+                {lead.notes ? lead.notes.split("\n").map((line, index) => <p key={index}>{line || <br />}</p>) : <p className="muted">Nenhuma informação registrada.</p>}
+              </div>
+              {can("leads.write") && (
+                <div className="note-composer">
+                  <textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder={`Adicione uma informação em ${fieldLabel("notes").toLowerCase()}`} />
+                  <div>
+                    <span>{note.trim().length ? `${note.trim().length} caracteres` : "O registro ficará disponível na linha do tempo."}</span>
+                    <button
+                      className="primary-button compact"
+                      disabled={!note.trim()}
+                      onClick={async () => {
+                        await addLeadNote(lead.id, note);
+                        setNote("");
+                      }}
+                    >
+                      <Check size={16} /> Registrar
+                    </button>
+                  </div>
+                </div>
+              )}
+            </section>
+          )}
 
           <section className="drawer-section timeline">
             <div className="section-title-row">

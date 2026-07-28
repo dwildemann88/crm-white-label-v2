@@ -1,0 +1,45 @@
+ETAPA 1 — CONFIGURAÇÃO DOS CAMPOS PADRÃO DO LEAD
+
+Este pacote contém somente os arquivos alterados. Não contém:
+- node_modules
+- .git
+- .env
+- .env.local
+- chaves ou tokens
+
+OBJETIVO DESTA ETAPA
+1. Criar a tabela lead_field_settings no Supabase.
+2. Criar 12 campos estruturais configuráveis por organização.
+3. Permitir alterar:
+   - nome exibido;
+   - ordem;
+   - ativo/inativo;
+   - obrigatório;
+   - exibição na tabela.
+4. Copiar essas configurações ao criar uma nova organização.
+5. Exibir o editor em Administração > Campos e etiquetas.
+
+IMPORTANTE
+Nesta etapa, as configurações já são salvas e persistidas, mas ainda não controlam
+o formulário, a tabela e o painel do lead. Essa aplicação dinâmica será a Etapa 2,
+após a validação da base e do editor administrativo.
+
+VALIDAÇÕES EXECUTADAS
+- npm run typecheck: aprovado
+- npm run verify: aprovado
+- build Vite não foi concluído no ambiente de análise porque o ZIP continha somente
+  os binários opcionais do Rollup para Windows. Isso não indica erro no código.
+
+ARQUIVOS ALTERADOS
+- supabase/migrations/202607280001_lead_field_settings.sql
+- src/core/leadFields.ts
+- src/core/types.ts
+- src/data/seed.ts
+- src/infrastructure/CrmGateway.ts
+- src/infrastructure/LocalCrmGateway.ts
+- src/infrastructure/RestCrmGateway.ts
+- src/infrastructure/SupabaseCrmGateway.ts
+- src/infrastructure/supabase/database.types.ts
+- src/app/CrmContext.tsx
+- src/pages/AdminPage.tsx
+- src/ui-system.css

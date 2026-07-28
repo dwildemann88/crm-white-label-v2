@@ -1,3 +1,4 @@
+import { createDefaultLeadFields, normalizeLeadField } from "../core/leadFields";
 import { can, canAccessLead } from "../core/permissions";
 import type {
   AppSnapshot,
@@ -6,6 +7,7 @@ import type {
   CrmDatabase,
   IntegrationConnection,
   Lead,
+  LeadFieldDefinition,
   LeadInput,
   NotificationItem,
   Organization,
@@ -30,7 +32,17 @@ const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 function readDatabase(): CrmDatabase {
   try {
     const raw = localStorage.getItem(DB_KEY);
-    return raw ? (JSON.parse(raw) as CrmDatabase) : clone(seedDatabase);
+    const database = raw
+      ? (JSON.parse(raw) as CrmDatabase)
+      : clone(seedDatabase);
+
+    if (!Array.isArray(database.leadFields)) {
+      database.leadFields = database.organizations.flatMap((organization) =>
+        createDefaultLeadFields(organization.id),
+      );
+    }
+
+    return database;
   } catch {
     return clone(seedDatabase);
   }
@@ -295,6 +307,9 @@ export class LocalCrmGateway implements CrmGateway {
           scopedLeadIds.has(item.leadId),
       ),
       tasks: scopedTasks,
+      leadFields: database.leadFields.filter(
+        (item) => item.organizationId === organizationId,
+      ),
       customFields: database.customFields.filter(
         (item) => item.organizationId === organizationId,
       ),
@@ -1069,6 +1084,38 @@ export class LocalCrmGateway implements CrmGateway {
     writeDatabase(database);
   }
 
+  async saveLeadField(
+    session: Session,
+    field: LeadFieldDefinition,
+  ): Promise<void> {
+    const database = readDatabase();
+    const actor = currentUser(database, session);
+
+    if (!can(actor, "pipeline.manage")) {
+      throw new Error("Sem permissão para configurar os campos do lead.");
+    }
+
+    if (field.organizationId !== session.organizationId) {
+      throw new Error("O campo não pertence à organização ativa.");
+    }
+
+    const normalized = normalizeLeadField({
+      ...field,
+      organizationId: session.organizationId,
+    });
+
+    const index = database.leadFields.findIndex(
+      (item) =>
+        item.organizationId === session.organizationId &&
+        item.key === normalized.key,
+    );
+
+    if (index >= 0) database.leadFields[index] = normalized;
+    else database.leadFields.push(normalized);
+
+    writeDatabase(database);
+  }
+
   async saveCustomField(session: Session, field: CustomFieldDefinition) {
     const database = readDatabase();
     const actor = currentUser(database, session);
@@ -1328,6 +1375,16 @@ export class LocalCrmGateway implements CrmGateway {
         });
       });
 
+    database.leadFields
+      .filter((item) => item.organizationId === configurationSourceId)
+      .forEach((item) =>
+        database.leadFields.push({
+          ...clone(item),
+          id: uid("lead_field"),
+          organizationId,
+        }),
+      );
+
     database.customFields
       .filter((item) => item.organizationId === configurationSourceId)
       .forEach((item) =>
@@ -1412,6 +1469,16 @@ export class LocalCrmGateway implements CrmGateway {
             pipelineId: pipelineMap.get(item.pipelineId) || item.pipelineId,
           });
         });
+      database.leadFields
+        .filter((item) => item.organizationId === sourceId)
+        .forEach((item) =>
+          database.leadFields.push({
+            ...clone(item),
+            id: uid("lead_field"),
+            organizationId,
+          }),
+        );
+
       database.customFields
         .filter((item) => item.organizationId === sourceId)
         .forEach((item) =>

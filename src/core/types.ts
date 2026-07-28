@@ -29,6 +29,28 @@ export type MessageStatus =
 export type CustomFieldType = "text" | "number" | "date" | "select" | "boolean";
 export type CustomFieldValue = string | number | boolean;
 
+export type LeadFieldKey =
+  | "name"
+  | "company"
+  | "phone"
+  | "email"
+  | "city"
+  | "origin"
+  | "campaign"
+  | "priority"
+  | "temperature"
+  | "score"
+  | "value"
+  | "notes";
+
+export type LeadFieldType =
+  | "text"
+  | "email"
+  | "phone"
+  | "number"
+  | "select"
+  | "textarea";
+
 export interface Branding {
   productName: string;
   companyName: string;
@@ -144,6 +166,19 @@ export interface Task {
   reminderMinutes: number;
   createdAt: string;
   reminderNotifiedAt?: string;
+}
+
+export interface LeadFieldDefinition {
+  id: string;
+  organizationId: string;
+  key: LeadFieldKey;
+  label: string;
+  type: LeadFieldType;
+  required: boolean;
+  active: boolean;
+  showInTable: boolean;
+  position: number;
+  locked: boolean;
 }
 
 export interface CustomFieldDefinition {
@@ -278,6 +313,7 @@ export interface CrmDatabase {
   leads: Lead[];
   histories: LeadHistory[];
   tasks: Task[];
+  leadFields: LeadFieldDefinition[];
   customFields: CustomFieldDefinition[];
   tags: TagDefinition[];
   conversations: Conversation[];

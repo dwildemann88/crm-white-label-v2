@@ -5,6 +5,7 @@ import type {
   CustomFieldDefinition,
   IntegrationConnection,
   Lead,
+  LeadFieldDefinition,
   LeadInput,
   Organization,
   Pipeline,
@@ -200,6 +201,17 @@ removeUser(session: Session, userId: string) {
     return this.request<void>(
       `/stages/${stageId}`,
       { method: "DELETE" },
+      session,
+    );
+  }
+
+  saveLeadField(session: Session, field: LeadFieldDefinition) {
+    return this.request<void>(
+      `/lead-fields/${field.key}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(field),
+      },
       session,
     );
   }

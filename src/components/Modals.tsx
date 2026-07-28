@@ -1,16 +1,167 @@
 import { CalendarDays, Check, LockKeyhole, Plus, Save, ShieldCheck, Trash2, Users } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useCrm } from "../app/CrmContext";
+import { eligibleLeadOwners } from "../core/crmConsistency";
+import {
+  createDefaultLeadFields,
+  leadFieldHasValue,
+  orderLeadFields,
+} from "../core/leadFields";
 import type {
   Lead,
+  LeadFieldDefinition,
+  LeadFieldKey,
   LeadInput,
   Task,
   TaskInput,
   UserInput,
 } from "../core/types";
-import { eligibleLeadOwners } from "../core/crmConsistency";
 import { localDateKey } from "../core/utils";
 import { ModalShell, TagSelector } from "./Common";
+
+const defaultOrigins = [
+  "Meta Ads",
+  "Google Ads",
+  "Landing Page",
+  "Indicação",
+  "Evento",
+  "Entrada manual",
+];
+
+function StandardLeadField({
+  field,
+  form,
+  originOptions,
+  autoFocus,
+  onChange,
+}: {
+  field: LeadFieldDefinition;
+  form: LeadInput;
+  originOptions: string[];
+  autoFocus: boolean;
+  onChange(key: LeadFieldKey, value: string | number): void;
+}) {
+  const label = `${field.label}${field.required ? " *" : ""}`;
+  const className = field.key === "notes" ? "full-field" : undefined;
+
+  if (field.key === "origin") {
+    return (
+      <label className={className}>
+        {label}
+        <select
+          value={form.origin}
+          required={field.required}
+          autoFocus={autoFocus}
+          onChange={(event) => onChange(field.key, event.target.value)}
+        >
+          {!form.origin && <option value="">Selecione</option>}
+          {originOptions.map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
+      </label>
+    );
+  }
+
+  if (field.key === "priority") {
+    return (
+      <label className={className}>
+        {label}
+        <select
+          value={form.priority}
+          required={field.required}
+          autoFocus={autoFocus}
+          onChange={(event) => onChange(field.key, event.target.value)}
+        >
+          <option>Baixa</option>
+          <option>Média</option>
+          <option>Alta</option>
+          <option>Urgente</option>
+        </select>
+      </label>
+    );
+  }
+
+  if (field.key === "temperature") {
+    return (
+      <label className={className}>
+        {label}
+        <select
+          value={form.temperature}
+          required={field.required}
+          autoFocus={autoFocus}
+          onChange={(event) => onChange(field.key, event.target.value)}
+        >
+          <option>Frio</option>
+          <option>Morno</option>
+          <option>Quente</option>
+        </select>
+      </label>
+    );
+  }
+
+  if (field.key === "score" || field.key === "value") {
+    const isScore = field.key === "score";
+    return (
+      <label className={className}>
+        {label}
+        <input
+          type="number"
+          min="0"
+          max={isScore ? "100" : undefined}
+          value={form[field.key]}
+          required={field.required}
+          autoFocus={autoFocus}
+          onChange={(event) => {
+            const parsed = Number(event.target.value);
+            const value = isScore
+              ? Math.min(100, Math.max(0, parsed))
+              : Math.max(0, parsed);
+            onChange(field.key, value);
+          }}
+        />
+      </label>
+    );
+  }
+
+  if (field.key === "notes") {
+    return (
+      <label className={className}>
+        {label}
+        <textarea
+          value={form.notes}
+          required={field.required}
+          autoFocus={autoFocus}
+          onChange={(event) => onChange(field.key, event.target.value)}
+          placeholder="Registre informações relevantes para a equipe"
+        />
+      </label>
+    );
+  }
+
+  const inputType =
+    field.key === "email"
+      ? "email"
+      : field.key === "phone"
+        ? "tel"
+        : "text";
+
+  return (
+    <label className={className}>
+      {label}
+      <input
+        type={inputType}
+        value={String(form[field.key] ?? "")}
+        required={field.required}
+        autoFocus={autoFocus}
+        placeholder={field.key === "phone" ? "Digite o telefone" : undefined}
+        onChange={(event) => onChange(field.key, event.target.value)}
+      />
+    </label>
+  );
+}
 
 export function LeadModal({
   lead,
@@ -30,6 +181,18 @@ export function LeadModal({
   const tagColors = Object.fromEntries(
     (data?.tags || []).map((tag) => [tag.name, tag.color]),
   );
+  const organizationId = data?.session?.organizationId || "current";
+  const configuredLeadFields = data?.leadFields || [];
+  const leadFields = useMemo(
+    () =>
+      orderLeadFields(
+        (configuredLeadFields.length
+          ? configuredLeadFields
+          : createDefaultLeadFields(organizationId)
+        ).filter((field) => field.active),
+      ),
+    [configuredLeadFields, organizationId],
+  );
 
   const [form, setForm] = useState<LeadInput>(() =>
     lead
@@ -43,9 +206,9 @@ export function LeadModal({
           company: "",
           phone: "",
           email: "",
-          city: "Santa Rosa/RS",
+          city: "",
           origin: "Entrada manual",
-          campaign: "Cadastro interno",
+          campaign: "",
           priority: "Média",
           temperature: "Morno",
           score: 60,
@@ -70,11 +233,30 @@ export function LeadModal({
 
   const change = <K extends keyof LeadInput>(key: K, value: LeadInput[K]) =>
     setForm((old) => ({ ...old, [key]: value }));
+  const changeLeadField = (key: LeadFieldKey, value: string | number) =>
+    setForm((old) => ({ ...old, [key]: value }) as LeadInput);
+
   const eligibleUsers = eligibleLeadOwners(users, form.pipelineId);
   useEffect(() => {
     if (eligibleUsers.some((user) => user.id === form.ownerId)) return;
     setForm((old) => ({ ...old, ownerId: eligibleUsers[0]?.id || "" }));
   }, [eligibleUsers, form.ownerId]);
+
+  const originOptions = useMemo(
+    () =>
+      Array.from(
+        new Set([
+          ...defaultOrigins,
+          ...(data?.leads || []).map((item) => item.origin).filter(Boolean),
+          form.origin,
+        ]),
+      ).filter(Boolean),
+    [data?.leads, form.origin],
+  );
+
+  const requiredLeadFieldsFilled = leadFields
+    .filter((field) => field.required)
+    .every((field) => leadFieldHasValue(form, field.key));
   const requiredCustomFieldsFilled = customFields
     .filter((field) => field.required)
     .every((field) => {
@@ -82,10 +264,9 @@ export function LeadModal({
       return value !== undefined && value !== null && value !== "";
     });
   const valid = Boolean(
-    form.name.trim() &&
-      form.phone.trim() &&
-      form.ownerId &&
+    form.ownerId &&
       form.stageId &&
+      requiredLeadFieldsFilled &&
       requiredCustomFieldsFilled,
   );
   const changeCustomValue = (key: string, value: string | number | boolean) =>
@@ -97,7 +278,7 @@ export function LeadModal({
   return (
     <ModalShell
       title={lead ? "Editar lead" : "Cadastrar lead"}
-      subtitle="Campos organizados para serem enviados ao backend sem alterar a interface."
+      subtitle="Os campos visíveis e obrigatórios seguem a configuração desta empresa."
       onClose={onClose}
       wide
     >
@@ -111,175 +292,79 @@ export function LeadModal({
         }}
       >
         <div className="form-grid">
-          <label>
-            Nome *
-            <input
-              value={form.name}
-              onChange={(event) => change("name", event.target.value)}
-              autoFocus
+          {leadFields.map((field, index) => (
+            <StandardLeadField
+              key={field.id}
+              field={field}
+              form={form}
+              originOptions={originOptions}
+              autoFocus={index === 0}
+              onChange={changeLeadField}
             />
-          </label>
-          <label>
-            Empresa
-            <input
-              value={form.company}
-              onChange={(event) => change("company", event.target.value)}
-            />
-          </label>
-          <label>
-            Telefone *
-            <input
-              value={form.phone}
-              onChange={(event) => change("phone", event.target.value)}
-              placeholder="(55) 9 9999-9999"
-            />
-          </label>
-          <label>
-            E-mail
-            <input
-              type="email"
-              value={form.email}
-              onChange={(event) => change("email", event.target.value)}
-            />
-          </label>
-          <label>
-            Cidade
-            <input
-              value={form.city}
-              onChange={(event) => change("city", event.target.value)}
-            />
-          </label>
-          <label>
-            Origem
-            <select
-              value={form.origin}
-              onChange={(event) => change("origin", event.target.value)}
-            >
-              <option>Meta Ads</option>
-              <option>Google Ads</option>
-              <option>Landing Page</option>
-              <option>Indicação</option>
-              <option>Evento</option>
-              <option>Entrada manual</option>
-            </select>
-          </label>
-          <label>
-            Campanha
-            <input
-              value={form.campaign}
-              onChange={(event) => change("campaign", event.target.value)}
-            />
-          </label>
-          <label>
-            Funil
-            <select
-              value={form.pipelineId}
-              onChange={(event) => {
-                const pipelineId = event.target.value;
-                const firstStage = allStages.find(
-                  (stage) => stage.pipelineId === pipelineId,
-                );
-                const eligible = eligibleLeadOwners(users, pipelineId);
-                setForm((old) => ({
-                  ...old,
-                  pipelineId,
-                  stageId: firstStage?.id || "",
-                  ownerId: eligible.some((user) => user.id === old.ownerId)
-                    ? old.ownerId
-                    : eligible[0]?.id || "",
-                }));
-              }}
-            >
-              {pipelines.map((pipeline) => (
-                <option key={pipeline.id} value={pipeline.id}>
-                  {pipeline.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Etapa
-            <select
-              value={form.stageId}
-              onChange={(event) => change("stageId", event.target.value)}
-            >
-              {stages.map((stage) => (
-                <option key={stage.id} value={stage.id}>
-                  {stage.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Responsável
-            <select
-              value={form.ownerId}
-              disabled={!can("leads.assign")}
-              onChange={(event) => change("ownerId", event.target.value)}
-            >
-              {eligibleUsers.map((user) => (
-                <option key={user.id} value={user.id}>
-                  {user.name} — {user.roleLabel}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Prioridade
-            <select
-              value={form.priority}
-              onChange={(event) =>
-                change("priority", event.target.value as LeadInput["priority"])
-              }
-            >
-              <option>Baixa</option>
-              <option>Média</option>
-              <option>Alta</option>
-              <option>Urgente</option>
-            </select>
-          </label>
-          <label>
-            Temperatura
-            <select
-              value={form.temperature}
-              onChange={(event) =>
-                change(
-                  "temperature",
-                  event.target.value as LeadInput["temperature"],
-                )
-              }
-            >
-              <option>Frio</option>
-              <option>Morno</option>
-              <option>Quente</option>
-            </select>
-          </label>
-          <label>
-            Score
-            <input
-              type="number"
-              min="0"
-              max="100"
-              value={form.score}
-              onChange={(event) =>
-                change(
-                  "score",
-                  Math.min(100, Math.max(0, Number(event.target.value))),
-                )
-              }
-            />
-          </label>
-          <label>
-            Valor estimado
-            <input
-              type="number"
-              min="0"
-              value={form.value}
-              onChange={(event) =>
-                change("value", Math.max(0, Number(event.target.value)))
-              }
-            />
-          </label>
+          ))}
+        </div>
+
+        <div className="custom-values-section">
+          <strong>Organização no funil</strong>
+          <div className="form-grid">
+            <label>
+              Funil *
+              <select
+                value={form.pipelineId}
+                required
+                onChange={(event) => {
+                  const pipelineId = event.target.value;
+                  const firstStage = allStages.find(
+                    (stage) => stage.pipelineId === pipelineId,
+                  );
+                  const eligible = eligibleLeadOwners(users, pipelineId);
+                  setForm((old) => ({
+                    ...old,
+                    pipelineId,
+                    stageId: firstStage?.id || "",
+                    ownerId: eligible.some((user) => user.id === old.ownerId)
+                      ? old.ownerId
+                      : eligible[0]?.id || "",
+                  }));
+                }}
+              >
+                {pipelines.map((pipeline) => (
+                  <option key={pipeline.id} value={pipeline.id}>
+                    {pipeline.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Etapa *
+              <select
+                value={form.stageId}
+                required
+                onChange={(event) => change("stageId", event.target.value)}
+              >
+                {stages.map((stage) => (
+                  <option key={stage.id} value={stage.id}>
+                    {stage.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Responsável *
+              <select
+                value={form.ownerId}
+                required
+                disabled={!can("leads.assign")}
+                onChange={(event) => change("ownerId", event.target.value)}
+              >
+                {eligibleUsers.map((user) => (
+                  <option key={user.id} value={user.id}>
+                    {user.name} — {user.roleLabel}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
         </div>
 
         {customFields.length > 0 && (
@@ -295,6 +380,7 @@ export function LeadModal({
                       {field.required ? " *" : ""}
                       <select
                         value={String(value ?? "")}
+                        required={field.required}
                         onChange={(event) =>
                           changeCustomValue(field.key, event.target.value)
                         }
@@ -322,6 +408,7 @@ export function LeadModal({
                               ? "false"
                               : ""
                         }
+                        required={field.required}
                         onChange={(event) =>
                           changeCustomValue(
                             field.key,
@@ -351,6 +438,7 @@ export function LeadModal({
                             : "text"
                       }
                       value={value === undefined ? "" : String(value)}
+                      required={field.required}
                       onChange={(event) =>
                         changeCustomValue(
                           field.key,
@@ -376,15 +464,6 @@ export function LeadModal({
             value={form.tags}
             onChange={(value) => change("tags", value)}
             colors={tagColors}
-          />
-        </label>
-
-        <label className="full-field">
-          Observações
-          <textarea
-            value={form.notes}
-            onChange={(event) => change("notes", event.target.value)}
-            placeholder="Contexto do lead"
           />
         </label>
 

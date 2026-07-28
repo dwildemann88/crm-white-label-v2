@@ -4,6 +4,7 @@ import type {
   CustomFieldDefinition,
   IntegrationConnection,
   Lead,
+  LeadFieldDefinition,
   LeadInput,
   Organization,
   Pipeline,
@@ -40,6 +41,10 @@ removeUser(session: Session, userId: string): Promise<void>;
   deletePipeline(session: Session, pipelineId: string): Promise<void>;
   saveStage(session: Session, stage: PipelineStage): Promise<void>;
   deleteStage(session: Session, stageId: string): Promise<void>;
+  saveLeadField(
+    session: Session,
+    field: LeadFieldDefinition,
+  ): Promise<void>;
   saveCustomField(
     session: Session,
     field: CustomFieldDefinition,

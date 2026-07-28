@@ -1,3 +1,4 @@
+import { createDefaultLeadFields } from "../core/leadFields";
 import type { CrmDatabase } from "../core/types";
 
 export const demoCredentials = [
@@ -551,6 +552,7 @@ export const seedDatabase: CrmDatabase = {
       createdAt: "2026-07-14T13:05:00.000Z",
     },
   ],
+  leadFields: createDefaultLeadFields("org_projem"),
   customFields: [
     {
       id: "field_bill",

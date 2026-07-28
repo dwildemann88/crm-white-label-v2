@@ -1,3 +1,4 @@
+import { createDefaultLeadFields, isLeadFieldKey, normalizeLeadField } from "../core/leadFields";
 import type { CrmGateway } from "./CrmGateway";
 import type {
   AppSnapshot,
@@ -8,6 +9,7 @@ import type {
   IntegrationConnection,
   Lead,
   LeadHistory,
+  LeadFieldDefinition,
   LeadInput,
   LeadPriority,
   LeadTemperature,
@@ -600,6 +602,7 @@ export class SupabaseCrmGateway implements CrmGateway {
   leadsData,
   tagsData,
   leadTagsData,
+  leadFieldsData,
   fieldsData,
   fieldOptionsData,
   customValuesData,
@@ -673,6 +676,15 @@ export class SupabaseCrmGateway implements CrmGateway {
           .from("lead_tags")
           .select("lead_id,tag_id")
           .eq("organization_id", organizationId),
+      ),
+      requireData<any[]>(
+        supabase
+          .from("lead_field_settings")
+          .select(
+            "id,organization_id,field_key,label,field_type,is_required,is_active,show_in_table,position",
+          )
+          .eq("organization_id", organizationId)
+          .order("position"),
       ),
       requireData<any[]>(
         supabase
@@ -1035,6 +1047,27 @@ for (const reminder of remindersData) {
       };
     });
 
+    const mappedLeadFields: LeadFieldDefinition[] = leadFieldsData
+      .filter((item) => isLeadFieldKey(item.field_key))
+      .map((item) =>
+        normalizeLeadField({
+          id: item.id,
+          organizationId: item.organization_id,
+          key: item.field_key,
+          label: item.label,
+          type: item.field_type,
+          required: item.is_required,
+          active: item.is_active,
+          showInTable: item.show_in_table,
+          position: item.position,
+          locked: item.field_key === "name",
+        }),
+      );
+
+    const leadFields = mappedLeadFields.length
+      ? mappedLeadFields
+      : createDefaultLeadFields(organizationId);
+
     const customFields: CustomFieldDefinition[] = fieldsData.map((item) => ({
       id: item.id,
       organizationId: item.organization_id,
@@ -1260,6 +1293,7 @@ for (const reminder of remindersData) {
       leads,
       histories,
       tasks,
+      leadFields,
       customFields,
       tags,
       conversations,
@@ -2022,6 +2056,36 @@ if (input.id) {
       .delete()
       .eq("organization_id", session.organizationId)
       .eq("id", stageId);
+    if (error) throw new Error(error.message);
+  }
+
+  async saveLeadField(
+    session: Session,
+    field: LeadFieldDefinition,
+  ): Promise<void> {
+    if (field.organizationId !== session.organizationId) {
+      throw new Error("O campo não pertence à organização ativa.");
+    }
+
+    const normalized = normalizeLeadField(field);
+
+    const payload = {
+      organization_id: session.organizationId,
+      field_key: normalized.key,
+      label: normalized.label,
+      field_type: normalized.type,
+      is_required: normalized.required,
+      is_active: normalized.active,
+      show_in_table: normalized.showInTable,
+      position: normalized.position,
+    };
+
+    const { error } = await supabase
+      .from("lead_field_settings")
+      .upsert(payload, {
+        onConflict: "organization_id,field_key",
+      });
+
     if (error) throw new Error(error.message);
   }
 
