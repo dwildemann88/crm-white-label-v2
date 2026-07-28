@@ -292,22 +292,26 @@ Deno.serve(async (request) => {
             .select("id", { count: "exact", head: true })
             .eq("organization_id", organizationId)
             .eq("assigned_to", requestedUserId),
+
           adminClient
             .from("conversations")
             .select("id", { count: "exact", head: true })
             .eq("organization_id", organizationId)
             .eq("assigned_to", requestedUserId),
+
           adminClient
             .from("tasks")
             .select("id", { count: "exact", head: true })
             .eq("organization_id", organizationId)
-            .eq("assigned_to", requestedUserId),
+            .eq("assigned_to", requestedUserId)
+            .in("status", ["pending", "in_progress"]),
         ]);
+       if (leadsResult.error) throw leadsResult.error;
 
-      if (leadsResult.error) throw leadsResult.error;
       if (conversationsResult.error) {
         throw conversationsResult.error;
       }
+
       if (tasksResult.error) throw tasksResult.error;
 
       const assignedLeads = leadsResult.count ?? 0;
