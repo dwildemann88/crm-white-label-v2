@@ -23,7 +23,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useCrm } from "../app/CrmContext";
 import { Avatar, EmptyState, OriginBadge } from "../components/Common";
 import { canUserHandleConversation, eligibleConversationOwners } from "../core/crmConsistency";
-import type { Message, MessageStatus, MessageType } from "../core/types";
+import { resolveLeadFields } from "../core/leadFields";
+import type { LeadFieldKey, Message, MessageStatus, MessageType } from "../core/types";
 import { formatDateTime } from "../core/utils";
 
 type ChatFilter = "all" | "unread" | "mine";
@@ -509,6 +510,20 @@ export function InboxPage({
   const activeOrganization = data?.organizations.find(
     (organization) => organization.id === data.session?.organizationId,
   );
+  const organizationId = data?.session?.organizationId || "sem-organizacao";
+  const leadFields = useMemo(
+    () => resolveLeadFields(data?.leadFields || [], organizationId),
+    [data?.leadFields, organizationId],
+  );
+  const fieldMap = useMemo(
+    () => new Map(leadFields.map((field) => [field.key, field])),
+    [leadFields],
+  );
+  const activeField = (key: LeadFieldKey) => fieldMap.get(key)?.active === true;
+  const searchableFields = leadFields.filter(
+    (field) => field.active && ["name", "company", "phone", "email"].includes(field.key),
+  );
+  const searchPlaceholder = `Buscar ${searchableFields.map((field) => field.label.toLowerCase()).join(", ") || "contato"}`;
 
   const [selectedId, setSelectedId] = useState(allConversations[0]?.id || "");
   const [mobileConversationOpen, setMobileConversationOpen] = useState(false);
@@ -634,17 +649,18 @@ export function InboxPage({
         const lead = visibleLeads.find(
           (item) => item.id === conversation.leadId,
         );
-        const matchesSearch =
-          `${lead?.name || ""} ${lead?.phone || ""} ${lead?.company || ""}`
-            .toLowerCase()
-            .includes(search.toLowerCase());
+        const matchesSearch = searchableFields
+          .map((field) => String(lead?.[field.key] ?? ""))
+          .join(" ")
+          .toLowerCase()
+          .includes(search.toLowerCase());
         const matchesFilter =
           filter === "all" ||
           (filter === "unread" && conversation.unread > 0) ||
           (filter === "mine" && conversation.ownerId === currentUser?.id);
         return matchesSearch && matchesFilter;
       }),
-    [allConversations, currentUser?.id, filter, search, visibleLeads],
+    [allConversations, currentUser?.id, filter, search, searchableFields, visibleLeads],
   );
 
   useEffect(() => {
@@ -850,7 +866,7 @@ export function InboxPage({
         </div>
         <div className="chat-search">
           <Search size={16} />
-          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar nome, empresa ou telefone" />
+          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={searchPlaceholder} />
         </div>
         <div className="chat-filters" role="tablist" aria-label="Filtros de conversas">
           <button className={filter === "all" ? "active" : ""} onClick={() => setFilter("all")}>Todas <span>{allConversations.length}</span></button>
@@ -875,7 +891,7 @@ export function InboxPage({
                 <span className="lead-avatar">{contact?.name.split(" ").map((part) => part[0]).slice(0, 2).join("")}</span>
                 <div className="conversation-copy">
                   <div><strong>{contact?.name || "Contato não identificado"}</strong><time>{lastMessage ? formatDateTime(lastMessage.createdAt) : ""}</time></div>
-                  <span>{lastMessage?.body || contact?.phone || "Sem mensagem"}</span>
+                  <span>{lastMessage?.body || (activeField("phone") ? contact?.phone : "") || "Sem mensagem"}</span>
                   <small>{responsible ? `Atendimento: ${responsible.name}` : "Atendimento não atribuído"}</small>
                 </div>
                 {conversation.unread > 0 && <b>{conversation.unread}</b>}
@@ -893,11 +909,18 @@ export function InboxPage({
             <span className="lead-avatar">{lead.name.split(" ").map((part) => part[0]).slice(0, 2).join("")}</span>
             <div>
               <strong>{lead.name}</strong>
-              <span>{lead.phone}{lead.company ? ` · ${lead.company}` : ""}</span>
+              {(activeField("phone") || activeField("company")) && (
+                <span>
+                  {[
+                    activeField("phone") ? lead.phone : "",
+                    activeField("company") ? lead.company : "",
+                  ].filter(Boolean).join(" · ")}
+                </span>
+              )}
             </div>
           </button>
           <div className="chat-head-actions">
-            <OriginBadge origin={lead.origin} />
+            {activeField("origin") && lead.origin && <OriginBadge origin={lead.origin} />}
             <button type="button" className="secondary-button compact" onClick={() => onLead(lead.id)}>Abrir lead</button>
           </div>
         </header>

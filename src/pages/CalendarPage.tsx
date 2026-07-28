@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useCrm } from "../app/CrmContext";
+import { resolveLeadFields } from "../core/leadFields";
 import type { Task } from "../core/types";
 import { Avatar, PriorityBadge, SelectControl } from "../components/Common";
 import { formatDate } from "../core/utils";
@@ -32,6 +33,12 @@ export function CalendarPage({ onAdd, onEdit }: { onAdd(date?: string): void; on
   const [statusFilter, setStatusFilter] = useState<TaskStatusFilter>("Pendentes");
   const [selectedDate, setSelectedDate] = useState(todayKey);
 
+  const organizationId = data?.session?.organizationId || "sem-organizacao";
+  const leadFields = useMemo(
+    () => resolveLeadFields(data?.leadFields || [], organizationId),
+    [data?.leadFields, organizationId],
+  );
+  const companyActive = leadFields.some((field) => field.key === "company" && field.active);
   const users = (data?.users || []).filter((user) => user.active);
   const leads = data?.leads || [];
   const allTasks = data?.tasks || [];
@@ -152,7 +159,7 @@ export function CalendarPage({ onAdd, onEdit }: { onAdd(date?: string): void; on
                 <button className="agenda-main" onClick={() => onEdit(task.id)}>
                   <span className="agenda-date"><CalendarDays size={14} />{formatDate(task.date)} · {task.time}</span>
                   <strong>{task.title}</strong>
-                  <span>{lead ? `${lead.name}${lead.company ? ` · ${lead.company}` : ""}` : "Sem lead vinculado"}</span>
+                  <span>{lead ? `${lead.name}${companyActive && lead.company ? ` · ${lead.company}` : ""}` : "Sem lead vinculado"}</span>
                   <small>{task.type}</small>
                 </button>
                 <div className="agenda-meta"><PriorityBadge value={task.priority} /><Avatar user={owner} small /></div>

@@ -1780,3 +1780,31 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus
   .lead-field-row .stage-position-control,
   .lead-field-row .field-visibility-controls { grid-column: 1; }
 }
+
+/* White label: grades dinâmicas conforme campos ativos */
+.dashboard-secondary-grid.single,
+.report-two-columns.single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.team-performance-card dl.three-columns {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+@media (min-width: 1201px) {
+  .kpi-grid.items-2 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .kpi-grid.items-3 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .report-kpi-grid.items-4 {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .report-filter-grid.without-origin {
+    grid-template-columns: repeat(2, minmax(180px, 1fr)) repeat(2, minmax(180px, .8fr));
+  }
+}

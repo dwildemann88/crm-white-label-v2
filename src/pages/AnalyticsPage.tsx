@@ -13,11 +13,13 @@ import {
   UserRoundCheck,
   Users,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useCrm } from "../app/CrmContext";
 import { Avatar, OriginBadge, SelectControl } from "../components/Common";
 import { canUserOwnLead } from "../core/crmConsistency";
+import { resolveLeadFields } from "../core/leadFields";
 import type { LeadListPreset } from "../core/leadFilters";
+import type { LeadFieldKey } from "../core/types";
 import { currency, downloadCsv, localDateKey } from "../core/utils";
 
 interface AnalyticsPageProps {
@@ -78,6 +80,21 @@ function KpiCard({
 export function AnalyticsPage({ onOpenLeads }: AnalyticsPageProps) {
   const { data, visibleLeads } = useCrm();
   const initialRange = useMemo(defaultRange, []);
+  const organizationId = data?.session?.organizationId || "sem-organizacao";
+  const leadFields = useMemo(
+    () => resolveLeadFields(data?.leadFields || [], organizationId),
+    [data?.leadFields, organizationId],
+  );
+  const fieldMap = useMemo(
+    () => new Map(leadFields.map((field) => [field.key, field])),
+    [leadFields],
+  );
+  const activeField = (key: LeadFieldKey) => fieldMap.get(key)?.active === true;
+  const fieldLabel = (key: LeadFieldKey) => fieldMap.get(key)?.label || key;
+  const companyActive = activeField("company");
+  const originActive = activeField("origin");
+  const valueActive = activeField("value");
+
   const pipelines = (data?.pipelines || []).filter((pipeline) => pipeline.active);
   const allStages = [...(data?.stages || [])].sort((a, b) => a.order - b.order);
   const users = (data?.users || []).filter((user) => user.active);
@@ -88,9 +105,15 @@ export function AnalyticsPage({ onOpenLeads }: AnalyticsPageProps) {
   const [dateTo, setDateTo] = useState(initialRange.to);
 
   const origins = useMemo(
-    () => Array.from(new Set(visibleLeads.map((lead) => lead.origin))).sort((a, b) => a.localeCompare(b, "pt-BR")),
-    [visibleLeads],
+    () => originActive
+      ? Array.from(new Set(visibleLeads.map((lead) => lead.origin).filter(Boolean))).sort((a, b) => a.localeCompare(b, "pt-BR"))
+      : [],
+    [originActive, visibleLeads],
   );
+
+  useEffect(() => {
+    if (!originActive && origin !== "Todas") setOrigin("Todas");
+  }, [origin, originActive]);
   const eligibleOwners = useMemo(
     () => users.filter((user) => pipelineId === "Todos" || canUserOwnLead(user, pipelineId)),
     [pipelineId, users],
@@ -102,12 +125,12 @@ export function AnalyticsPage({ onOpenLeads }: AnalyticsPageProps) {
       return (
         (pipelineId === "Todos" || lead.pipelineId === pipelineId) &&
         (ownerId === "Todos" || lead.ownerId === ownerId) &&
-        (origin === "Todas" || lead.origin === origin) &&
+        (!originActive || origin === "Todas" || lead.origin === origin) &&
         (!dateFrom || createdAt >= dateFrom) &&
         (!dateTo || createdAt <= dateTo)
       );
     }),
-    [visibleLeads, pipelineId, ownerId, origin, dateFrom, dateTo],
+    [visibleLeads, pipelineId, ownerId, origin, originActive, dateFrom, dateTo],
   );
 
   const previousRange = useMemo(() => {
@@ -130,13 +153,13 @@ export function AnalyticsPage({ onOpenLeads }: AnalyticsPageProps) {
           return (
             (pipelineId === "Todos" || lead.pipelineId === pipelineId) &&
             (ownerId === "Todos" || lead.ownerId === ownerId) &&
-            (origin === "Todas" || lead.origin === origin) &&
+            (!originActive || origin === "Todas" || lead.origin === origin) &&
             createdAt >= previousRange.from &&
             createdAt <= previousRange.to
           );
         })
       : [],
-    [visibleLeads, pipelineId, ownerId, origin, previousRange],
+    [visibleLeads, pipelineId, ownerId, origin, originActive, previousRange],
   );
 
   const stageById = new Map(allStages.map((stage) => [stage.id, stage]));
@@ -221,7 +244,7 @@ export function AnalyticsPage({ onOpenLeads }: AnalyticsPageProps) {
       };
     });
 
-  const sourceStats = origins
+  const sourceStats = originActive ? origins
     .map((name) => {
       const leads = reportLeads.filter((lead) => lead.origin === name);
       const sourceWon = leads.filter((lead) => stageById.get(lead.stageId)?.kind === "won");
@@ -235,7 +258,8 @@ export function AnalyticsPage({ onOpenLeads }: AnalyticsPageProps) {
       };
     })
     .filter((item) => item.leads > 0)
-    .sort((a, b) => b.leads - a.leads);
+    .sort((a, b) => b.leads - a.leads)
+    : [];
 
   const ownerStats = eligibleOwners
     .map((user) => {
@@ -262,7 +286,7 @@ export function AnalyticsPage({ onOpenLeads }: AnalyticsPageProps) {
       };
     })
     .filter((item) => item.leads > 0 || item.overdue > 0)
-    .sort((a, b) => b.pipeline - a.pipeline);
+    .sort((a, b) => valueActive ? b.pipeline - a.pipeline : b.leads - a.leads);
 
   const trendBuckets = useMemo(() => {
     const start = dateFrom ? new Date(`${dateFrom}T12:00:00`) : new Date(Date.now() - 29 * 86_400_000);
@@ -308,7 +332,7 @@ export function AnalyticsPage({ onOpenLeads }: AnalyticsPageProps) {
   const openReportLeads = (preset: Omit<LeadListPreset, "id"> = {}) => onOpenLeads?.({
     pipelineId: pipelineId === "Todos" ? undefined : pipelineId,
     ownerId: ownerId === "Todos" ? undefined : ownerId,
-    origin: origin === "Todas" ? undefined : origin,
+    origin: originActive && origin !== "Todas" ? origin : undefined,
     dateFrom: dateFrom || undefined,
     dateTo: dateTo || undefined,
     ...preset,
@@ -316,25 +340,30 @@ export function AnalyticsPage({ onOpenLeads }: AnalyticsPageProps) {
 
   const exportReport = () => downloadCsv(
     "relatorio-comercial.csv",
-    reportLeads.map((lead) => ({
-      Lead: lead.name,
-      Empresa: lead.company,
-      Origem: lead.origin,
-      Funil: pipelines.find((pipeline) => pipeline.id === lead.pipelineId)?.name,
-      Etapa: allStages.find((stage) => stage.id === lead.stageId)?.name,
-      Responsável: users.find((user) => user.id === lead.ownerId)?.name,
-      Valor: lead.value,
-      CriadoEm: lead.createdAt,
-    })),
+    reportLeads.map((lead) => {
+      const row: Record<string, unknown> = {
+        [fieldLabel("name")]: lead.name,
+      };
+      if (companyActive) row[fieldLabel("company")] = lead.company;
+      if (originActive) row[fieldLabel("origin")] = lead.origin;
+      row.Funil = pipelines.find((pipeline) => pipeline.id === lead.pipelineId)?.name;
+      row.Etapa = allStages.find((stage) => stage.id === lead.stageId)?.name;
+      row.Responsável = users.find((user) => user.id === lead.ownerId)?.name;
+      if (valueActive) row[fieldLabel("value")] = lead.value;
+      row.CriadoEm = lead.createdAt;
+      return row;
+    }),
   );
+
+  const reportKpiCount = valueActive ? 6 : 4;
 
   return (
     <div className="analytics-page">
       <section className="panel report-toolbar">
-        <div className="report-filter-grid">
+        <div className={`report-filter-grid${originActive ? "" : " without-origin"}`}>
           <SelectControl value={pipelineId} onChange={(value) => { setPipelineId(value); setOwnerId("Todos"); }} options={["Todos", ...pipelines.map((pipeline) => pipeline.id)]} labels={{ Todos: "Todos os funis", ...Object.fromEntries(pipelines.map((pipeline) => [pipeline.id, pipeline.name])) }} icon={Layers3} />
           <SelectControl value={ownerId} onChange={setOwnerId} options={["Todos", ...eligibleOwners.map((user) => user.id)]} labels={{ Todos: "Todos os responsáveis", ...Object.fromEntries(eligibleOwners.map((user) => [user.id, user.name])) }} icon={Users} />
-          <SelectControl value={origin} onChange={setOrigin} options={["Todas", ...origins]} labels={{ Todas: "Todas as origens" }} icon={Target} />
+          {originActive && <SelectControl value={origin} onChange={setOrigin} options={["Todas", ...origins]} labels={{ Todas: `Todos: ${fieldLabel("origin")}` }} icon={Target} />}
           <label className="report-date-field"><CalendarRange size={16} /><span>De</span><input type="date" value={dateFrom} max={dateTo || undefined} onChange={(event) => setDateFrom(event.target.value)} /></label>
           <label className="report-date-field"><CalendarRange size={16} /><span>Até</span><input type="date" value={dateTo} min={dateFrom || undefined} onChange={(event) => setDateTo(event.target.value)} /></label>
         </div>
@@ -349,12 +378,12 @@ export function AnalyticsPage({ onOpenLeads }: AnalyticsPageProps) {
         </div>
       </section>
 
-      <section className="report-kpi-grid">
+      <section className={`report-kpi-grid items-${reportKpiCount}`}>
         <KpiCard icon={BarChart3} label="Leads no período" value={number(reportLeads.length)} detail={comparisonText(reportLeads.length, previousLeads.length)} tone="blue" onClick={() => openReportLeads()} />
-        <KpiCard icon={CircleDollarSign} label="Pipeline aberto" value={currency(pipelineValue)} detail={`${open.length} oportunidades · ${comparisonText(pipelineValue, previousPipelineValue)}`} tone="indigo" onClick={() => openReportLeads({ special: "open_lead", label: "Pipeline aberto" })} />
-        <KpiCard icon={CheckCircle2} label="Negócios ganhos" value={number(won.length)} detail={`${currency(wonValue)} · ${comparisonText(won.length, previousWon.length)}`} tone="green" onClick={() => openReportLeads({ special: "won_lead", label: "Negócios ganhos" })} />
+        {valueActive && <KpiCard icon={CircleDollarSign} label="Pipeline aberto" value={currency(pipelineValue)} detail={`${open.length} oportunidades · ${comparisonText(pipelineValue, previousPipelineValue)}`} tone="indigo" onClick={() => openReportLeads({ special: "open_lead", label: "Pipeline aberto" })} />}
+        <KpiCard icon={CheckCircle2} label="Negócios ganhos" value={number(won.length)} detail={valueActive ? `${currency(wonValue)} · ${comparisonText(won.length, previousWon.length)}` : comparisonText(won.length, previousWon.length)} tone="green" onClick={() => openReportLeads({ special: "won_lead", label: "Negócios ganhos" })} />
         <KpiCard icon={Target} label="Conversão de fechamentos" value={`${closedConversion}%`} detail={`${won.length} de ${won.length + lost.length} encerrados · ${comparisonText(closedConversion, previousConversion)}`} tone="violet" />
-        <KpiCard icon={TrendingUp} label="Ticket médio ganho" value={currency(averageWonTicket)} detail={comparisonText(averageWonTicket, previousTicket)} tone="amber" onClick={() => openReportLeads({ special: "won_lead", label: "Negócios ganhos" })} />
+        {valueActive && <KpiCard icon={TrendingUp} label="Ticket médio ganho" value={currency(averageWonTicket)} detail={comparisonText(averageWonTicket, previousTicket)} tone="amber" onClick={() => openReportLeads({ special: "won_lead", label: "Negócios ganhos" })} />}
         <KpiCard icon={Clock3} label="Tempo até o primeiro envio" value={minutesLabel(averageResponse)} detail={`${responseMinutes.length} leads com mensagem de saída mensurável`} tone="cyan" />
       </section>
 
@@ -378,7 +407,7 @@ export function AnalyticsPage({ onOpenLeads }: AnalyticsPageProps) {
         {funnelGroups.map((group) => (
           <article className="panel report-funnel-panel" key={group.pipeline.id}>
             <div className="panel-head">
-              <div><h2>{group.pipeline.name}</h2><p>Distribuição atual por etapa. Os valores representam o estado atual dos leads que entraram no período.</p></div>
+              <div><h2>{group.pipeline.name}</h2><p>{valueActive ? "Distribuição atual por etapa. Os valores representam o estado atual dos leads que entraram no período." : "Distribuição atual dos leads por etapa no período selecionado."}</p></div>
               <span className="report-scope-badge">{group.total} leads</span>
             </div>
             <div className="report-funnel-list">
@@ -391,7 +420,7 @@ export function AnalyticsPage({ onOpenLeads }: AnalyticsPageProps) {
                 >
                   <span className="report-funnel-name"><i style={{ background: item.stage.color }} /><strong>{item.stage.name}</strong><small>{item.share}% do funil</small></span>
                   <span className="report-funnel-track"><i style={{ width: `${item.width}%`, background: item.stage.color }} /></span>
-                  <span className="report-funnel-metrics"><strong>{item.count}</strong><small>{currency(item.value)}</small><ArrowRight size={15} /></span>
+                  <span className="report-funnel-metrics"><strong>{item.count}</strong>{valueActive && <small>{currency(item.value)}</small>}<ArrowRight size={15} /></span>
                 </button>
               ))}
             </div>
@@ -400,33 +429,35 @@ export function AnalyticsPage({ onOpenLeads }: AnalyticsPageProps) {
         {!funnelGroups.length && <section className="panel report-empty">Nenhum funil possui leads no recorte selecionado.</section>}
       </section>
 
-      <section className="report-two-columns">
-        <article className="panel report-source-panel">
-          <div className="panel-head"><div><h2>Desempenho por origem</h2><p>Volume, pipeline e resultado por canal de aquisição.</p></div></div>
-          <div className="report-table-wrap">
-            <table className="report-table">
-              <thead><tr><th>Origem</th><th>Leads</th><th>Pipeline</th><th>Ganhos</th><th>Conversão</th><th /></tr></thead>
-              <tbody>{sourceStats.map((item) => (
-                <tr key={item.name} role="button" tabIndex={0} onClick={() => openReportLeads({ origin: item.name, label: item.name })} onKeyDown={(event) => event.key === "Enter" && openReportLeads({ origin: item.name, label: item.name })}>
-                  <td><OriginBadge origin={item.name} /></td><td>{item.leads}</td><td>{currency(item.pipeline)}</td><td>{item.won}</td>
-                  <td><span className="conversion-cell"><span><i style={{ width: `${item.conversion}%` }} /></span><strong>{item.conversion}%</strong></span></td>
-                  <td><ArrowRight size={15} /></td>
-                </tr>
-              ))}</tbody>
-            </table>
-            {!sourceStats.length && <div className="report-empty compact">Nenhuma origem disponível neste período.</div>}
-          </div>
-        </article>
+      <section className={`report-two-columns${originActive ? "" : " single"}`}>
+        {originActive && (
+          <article className="panel report-source-panel">
+            <div className="panel-head"><div><h2>Desempenho por {fieldLabel("origin").toLowerCase()}</h2><p>{valueActive ? "Volume, pipeline e resultado por canal de aquisição." : "Volume e resultado por canal de aquisição."}</p></div></div>
+            <div className="report-table-wrap">
+              <table className="report-table">
+                <thead><tr><th>{fieldLabel("origin")}</th><th>Leads</th>{valueActive && <th>Pipeline</th>}<th>Ganhos</th><th>Conversão</th><th /></tr></thead>
+                <tbody>{sourceStats.map((item) => (
+                  <tr key={item.name} role="button" tabIndex={0} onClick={() => openReportLeads({ origin: item.name, label: item.name })} onKeyDown={(event) => event.key === "Enter" && openReportLeads({ origin: item.name, label: item.name })}>
+                    <td><OriginBadge origin={item.name} /></td><td>{item.leads}</td>{valueActive && <td>{currency(item.pipeline)}</td>}<td>{item.won}</td>
+                    <td><span className="conversion-cell"><span><i style={{ width: `${item.conversion}%` }} /></span><strong>{item.conversion}%</strong></span></td>
+                    <td><ArrowRight size={15} /></td>
+                  </tr>
+                ))}</tbody>
+              </table>
+              {!sourceStats.length && <div className="report-empty compact">Nenhum valor de {fieldLabel("origin").toLowerCase()} disponível neste período.</div>}
+            </div>
+          </article>
+        )}
 
         <article className="panel report-team-panel">
-          <div className="panel-head"><div><h2>Produtividade da equipe</h2><p>Carteira atual, pipeline, fechamentos e pendências por responsável.</p></div></div>
+          <div className="panel-head"><div><h2>Produtividade da equipe</h2><p>{valueActive ? "Carteira atual, pipeline, fechamentos e pendências por responsável." : "Carteira atual, fechamentos e pendências por responsável."}</p></div></div>
           <div className="team-performance-list">
             {ownerStats.map((item) => (
               <button type="button" className="team-performance-card" key={item.user.id} onClick={() => openReportLeads({ ownerId: item.user.id, label: item.user.name })}>
                 <div className="team-person"><Avatar user={item.user} /><span><strong>{item.user.name}</strong><small>{item.user.roleLabel}</small></span><ArrowRight size={15} /></div>
-                <dl>
+                <dl className={valueActive ? "" : "three-columns"}>
                   <div><dt>Ativos</dt><dd>{item.active}</dd></div>
-                  <div><dt>Pipeline</dt><dd>{currency(item.pipeline)}</dd></div>
+                  {valueActive && <div><dt>Pipeline</dt><dd>{currency(item.pipeline)}</dd></div>}
                   <div><dt>Ganhos</dt><dd>{item.won}</dd></div>
                   <div><dt>Conversão</dt><dd>{item.conversion}%</dd></div>
                 </dl>
