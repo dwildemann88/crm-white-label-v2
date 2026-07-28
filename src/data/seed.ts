@@ -564,6 +564,8 @@ export const seedDatabase: CrmDatabase = {
       required: false,
       active: true,
       showInTable: true,
+      position: 1,
+      pipelineId: null,
     },
     {
       id: "field_property",
@@ -575,6 +577,8 @@ export const seedDatabase: CrmDatabase = {
       required: false,
       active: true,
       showInTable: false,
+      position: 2,
+      pipelineId: null,
     },
     {
       id: "field_install",
@@ -591,6 +595,8 @@ export const seedDatabase: CrmDatabase = {
       required: false,
       active: true,
       showInTable: false,
+      position: 3,
+      pipelineId: null,
     },
   ],
   tags: [

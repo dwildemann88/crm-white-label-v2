@@ -26,7 +26,18 @@ export type MessageStatus =
   | "delivered"
   | "read"
   | "failed";
-export type CustomFieldType = "text" | "number" | "date" | "select" | "boolean";
+export type CustomFieldType =
+  | "text"
+  | "textarea"
+  | "number"
+  | "currency"
+  | "date"
+  | "datetime"
+  | "select"
+  | "boolean"
+  | "phone"
+  | "email"
+  | "url";
 export type CustomFieldValue = string | number | boolean;
 
 export type LeadFieldKey =
@@ -191,6 +202,8 @@ export interface CustomFieldDefinition {
   required: boolean;
   active: boolean;
   showInTable: boolean;
+  position: number;
+  pipelineId: string | null;
 }
 
 export interface TagDefinition {

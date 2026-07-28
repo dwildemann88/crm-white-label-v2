@@ -480,10 +480,21 @@ function splitCityAndState(value: string): {
 }
 
 const mapFieldType = (value: string): CustomFieldType => {
-  if (value === "number" || value === "currency") return "number";
-  if (value === "date" || value === "datetime") return "date";
-  if (value === "select" || value === "multiselect") return "select";
-  if (value === "boolean") return "boolean";
+  if (
+    value === "text" ||
+    value === "textarea" ||
+    value === "number" ||
+    value === "currency" ||
+    value === "date" ||
+    value === "datetime" ||
+    value === "select" ||
+    value === "boolean" ||
+    value === "phone" ||
+    value === "email" ||
+    value === "url"
+  ) {
+    return value;
+  }
   return "text";
 };
 
@@ -690,7 +701,7 @@ export class SupabaseCrmGateway implements CrmGateway {
         supabase
           .from("custom_fields")
           .select(
-            "id,organization_id,name,code,field_type,is_required,is_active,show_in_table,position",
+            "id,organization_id,pipeline_id,name,code,field_type,is_required,is_active,show_in_table,position",
           )
           .eq("organization_id", organizationId)
           .order("position"),
@@ -698,7 +709,7 @@ export class SupabaseCrmGateway implements CrmGateway {
       requireData<any[]>(
         supabase
           .from("custom_field_options")
-          .select("field_id,label,position")
+          .select("field_id,label,value,position")
           .eq("organization_id", organizationId)
           .order("position"),
       ),
@@ -898,6 +909,12 @@ export class SupabaseCrmGateway implements CrmGateway {
     const contactsById = new Map(contactsData.map((item) => [item.id, item]));
     const sourcesById = new Map(sourcesData.map((item) => [item.id, item.name]));
     const fieldById = new Map(fieldsData.map((item) => [item.id, item]));
+    const fieldOptionLabelByValue = new Map(
+      fieldOptionsData.map((option) => [
+        `${option.field_id}:${option.value}`,
+        option.label,
+      ]),
+    );
     const tagNameById = new Map(
   tagsData.map((item) => [item.id, item.name]),
 );
@@ -923,7 +940,13 @@ for (const item of leadTagsData) {
       if (!field) continue;
       const current = customValuesByLead.get(item.lead_id) ?? {};
       let value: CustomFieldValue | undefined;
-      if (item.value_text !== null) value = item.value_text;
+      if (item.value_text !== null) {
+        value =
+          field.field_type === "select"
+            ? fieldOptionLabelByValue.get(`${item.field_id}:${item.value_text}`) ??
+              item.value_text
+            : item.value_text;
+      }
       else if (item.value_number !== null) value = Number(item.value_number);
       else if (item.value_boolean !== null) value = item.value_boolean;
       else if (item.value_date !== null) value = item.value_date;
@@ -1080,6 +1103,8 @@ for (const reminder of remindersData) {
       required: item.is_required,
       active: item.is_active,
       showInTable: item.show_in_table,
+      position: item.position,
+      pipelineId: item.pipeline_id,
     }));
 
     const tags: TagDefinition[] = tagsData.map((item) => ({
@@ -2120,6 +2145,8 @@ if (input.id) {
           is_active: field.active,
           show_in_table: field.showInTable,
           is_filterable: true,
+          position: Math.max(1, Number(field.position) || 1),
+          pipeline_id: field.pipelineId || null,
         })
         .eq("organization_id", session.organizationId)
         .eq("id", field.id);
@@ -2143,12 +2170,15 @@ if (input.id) {
       const { error } = await supabase.from("custom_fields").insert({
         id: fieldId,
         organization_id: session.organizationId,
-        pipeline_id: null,
+        pipeline_id: field.pipelineId || null,
         name: field.name.trim(),
         code: uniqueCode,
         field_type: field.type,
         config: {},
-        position: (countRows[0]?.position ?? 0) + 1,
+        position: Math.max(
+          1,
+          Number(field.position) || (countRows[0]?.position ?? 0) + 1,
+        ),
         is_required: field.required,
         is_active: field.active,
         is_filterable: true,

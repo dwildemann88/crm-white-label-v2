@@ -21,6 +21,11 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { useCrm } from "../app/CrmContext";
 import { Avatar, EmptyState, PanelHead, RoleBadge } from "../components/Common";
+import {
+  customFieldSupportsOptions,
+  customFieldTypeOptions,
+  orderCustomFields,
+} from "../core/customFields";
 import { leadFieldTypeLabel, normalizeLeadField } from "../core/leadFields";
 import type {
   Branding,
@@ -101,7 +106,10 @@ export function AdminPage({ onUser, initialPipelineId }: { onUser(id?: string): 
   const sourceLeadFields = [...(data?.leadFields || [])].sort(
     (a, b) => a.position - b.position,
   );
-  const sourceFields = data?.customFields || [];
+  const sourceFields = useMemo(
+    () => orderCustomFields(data?.customFields || []),
+    [data?.customFields],
+  );
   const sourceTags = data?.tags || [];
   const organization = data?.organizations.find(
     (item) => item.id === data.session?.organizationId,
@@ -356,31 +364,72 @@ const removeOrganizationUser = async (user: User) => {
         required: false,
         active: true,
         showInTable: false,
+        position:
+          old.reduce((highest, field) => Math.max(highest, field.position), 0) + 1,
+        pipelineId: null,
       },
     ]);
   };
 
   const changeField = (id: string, patch: Partial<CustomFieldDefinition>) => {
     setFields((old) =>
-      old.map((field) => (field.id === id ? { ...field, ...patch } : field)),
+      old.map((field) => {
+        if (field.id !== id) return field;
+        const next = { ...field, ...patch };
+        return {
+          ...next,
+          options: customFieldSupportsOptions(next.type) ? next.options : [],
+        };
+      }),
     );
   };
 
-  const persistFields = async () => {
-    const valid = fields.every((field) => field.name.trim() && field.key.trim());
-    if (!valid) return;
-    for (const field of fields) {
-      await saveCustomField({
+  const moveField = (index: number, direction: -1 | 1) => {
+    const target = index + direction;
+    if (target < 0 || target >= fields.length) return;
+
+    const next = [...fields];
+    [next[index], next[target]] = [next[target], next[index]];
+    setFields(
+      next.map((field, fieldIndex) => ({
         ...field,
-        name: field.name.trim(),
-        key: field.key.trim(),
-      });
-    }
+        position: fieldIndex + 1,
+      })),
+    );
+  };
+
+  const customFieldsAreValid = fields.every((field) => {
+    if (!field.name.trim() || !field.key.trim()) return false;
+    if (!customFieldSupportsOptions(field.type)) return true;
+    return field.options.some((option) => option.trim());
+  });
+
+  const persistFields = async () => {
+    if (!customFieldsAreValid) return;
+
+    const normalized = fields.map((field, index) => ({
+      ...field,
+      name: field.name.trim(),
+      key: field.key.trim(),
+      position: index + 1,
+      pipelineId: field.pipelineId || null,
+      options: customFieldSupportsOptions(field.type)
+        ? Array.from(
+            new Set(field.options.map((option) => option.trim()).filter(Boolean)),
+          )
+        : [],
+    }));
+
+    for (const field of normalized) await saveCustomField(field);
   };
 
   const removeField = async (field: CustomFieldDefinition) => {
     if (!sourceFields.some((item) => item.id === field.id)) {
-      setFields((old) => old.filter((item) => item.id !== field.id));
+      setFields((old) =>
+        old
+          .filter((item) => item.id !== field.id)
+          .map((item, index) => ({ ...item, position: index + 1 })),
+      );
       return;
     }
     const confirmed = window.confirm(
@@ -888,37 +937,193 @@ const removeOrganizationUser = async (user: User) => {
               <section className="panel admin-section-panel">
                 <PanelHead
                   title="Campos personalizados"
-                  subtitle="Adicione informações úteis ao lead sem criar colunas diretamente no código."
+                  subtitle="Crie campos específicos da operação, defina a ordem e escolha se cada campo vale para todos os funis ou somente para um processo."
                   action={
                     <div className="panel-actions">
-                      <button className="secondary-button" onClick={addField}><Plus size={16} /> Novo campo</button>
-                      <button className="primary-button" onClick={() => void persistFields()} disabled={fields.some((field) => !field.name.trim() || !field.key.trim())}><Save size={16} /> Salvar campos</button>
+                      <button className="secondary-button" onClick={addField}>
+                        <Plus size={16} /> Novo campo
+                      </button>
+                      <button
+                        className="primary-button"
+                        onClick={() => void persistFields()}
+                        disabled={!customFieldsAreValid}
+                      >
+                        <Save size={16} /> Salvar campos
+                      </button>
                     </div>
                   }
                 />
 
                 <div className="custom-field-editor-v5">
                   <div className="custom-field-head">
-                    <span>Campo</span><span>Identificador</span><span>Tipo</span><span>Opções</span><span>Exibição</span><span />
+                    <span>Ordem</span>
+                    <span>Campo</span>
+                    <span>Identificador</span>
+                    <span>Tipo</span>
+                    <span>Aplicação</span>
+                    <span>Opções</span>
+                    <span>Exibição</span>
+                    <span />
                   </div>
-                  {fields.map((field) => (
+                  {fields.map((field, index) => (
                     <div className="custom-field-row" key={field.id}>
-                      <input value={field.name} onChange={(event) => changeField(field.id, { name: event.target.value })} placeholder="Nome do campo" />
-                      <input value={field.key} onChange={(event) => changeField(field.id, { key: event.target.value.toLowerCase().replace(/[^a-z0-9_]/g, "_") })} placeholder="identificador" />
-                      <select value={field.type} onChange={(event) => changeField(field.id, { type: event.target.value as CustomFieldDefinition["type"], options: event.target.value === "select" ? field.options : [] })}>
-                        <option value="text">Texto</option><option value="number">Número</option><option value="date">Data</option><option value="select">Seleção</option><option value="boolean">Sim/Não</option>
-                      </select>
-                      <input value={field.options.join(", ")} disabled={field.type !== "select"} onChange={(event) => changeField(field.id, { options: event.target.value.split(",").map((item) => item.trim()).filter(Boolean) })} placeholder={field.type === "select" ? "Opção 1, Opção 2" : "Não aplicável"} />
-                      <div className="field-visibility-controls">
-                        <label><input type="checkbox" checked={field.active} onChange={(event) => changeField(field.id, { active: event.target.checked })} /> Ativo</label>
-                        <label><input type="checkbox" checked={field.required} onChange={(event) => changeField(field.id, { required: event.target.checked })} /> Obrigatório</label>
-                        <label><input type="checkbox" checked={field.showInTable} onChange={(event) => changeField(field.id, { showInTable: event.target.checked })} /> Na tabela</label>
+                      <div className="stage-position-control">
+                        <strong>{index + 1}</strong>
+                        <span>
+                          <button
+                            type="button"
+                            disabled={index === 0}
+                            onClick={() => moveField(index, -1)}
+                            aria-label={`Mover ${field.name} para cima`}
+                          >
+                            <ArrowUp size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            disabled={index === fields.length - 1}
+                            onClick={() => moveField(index, 1)}
+                            aria-label={`Mover ${field.name} para baixo`}
+                          >
+                            <ArrowDown size={14} />
+                          </button>
+                        </span>
                       </div>
-                      <button type="button" className="icon-danger" onClick={() => void removeField(field)} aria-label="Excluir campo"><Trash2 size={16} /></button>
+
+                      <input
+                        value={field.name}
+                        onChange={(event) =>
+                          changeField(field.id, { name: event.target.value })
+                        }
+                        placeholder="Nome do campo"
+                      />
+
+                      <input
+                        value={field.key}
+                        disabled={sourceFields.some((item) => item.id === field.id)}
+                        title={
+                          sourceFields.some((item) => item.id === field.id)
+                            ? "O identificador é preservado depois que o campo é criado."
+                            : "Use letras minúsculas, números e sublinhado."
+                        }
+                        onChange={(event) =>
+                          changeField(field.id, {
+                            key: event.target.value
+                              .toLowerCase()
+                              .replace(/[^a-z0-9_]/g, "_"),
+                          })
+                        }
+                        placeholder="identificador"
+                      />
+
+                      <select
+                        value={field.type}
+                        onChange={(event) =>
+                          changeField(field.id, {
+                            type: event.target.value as CustomFieldDefinition["type"],
+                          })
+                        }
+                        aria-label={`Tipo do campo ${field.name}`}
+                      >
+                        {customFieldTypeOptions.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+
+                      <select
+                        value={field.pipelineId ?? ""}
+                        onChange={(event) =>
+                          changeField(field.id, {
+                            pipelineId: event.target.value || null,
+                          })
+                        }
+                        aria-label={`Funil do campo ${field.name}`}
+                      >
+                        <option value="">Todos os funis</option>
+                        {sourcePipelines.map((pipeline) => (
+                          <option key={pipeline.id} value={pipeline.id}>
+                            {pipeline.name}
+                          </option>
+                        ))}
+                      </select>
+
+                      <input
+                        value={field.options.join(", ")}
+                        disabled={!customFieldSupportsOptions(field.type)}
+                        onChange={(event) =>
+                          changeField(field.id, {
+                            options: event.target.value
+                              .split(",")
+                              .map((item) => item.trim()),
+                          })
+                        }
+                        placeholder={
+                          customFieldSupportsOptions(field.type)
+                            ? "Opção 1, Opção 2"
+                            : "Não aplicável"
+                        }
+                      />
+
+                      <div className="field-visibility-controls">
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={field.active}
+                            onChange={(event) =>
+                              changeField(field.id, { active: event.target.checked })
+                            }
+                          />
+                          Ativo
+                        </label>
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={field.required}
+                            onChange={(event) =>
+                              changeField(field.id, { required: event.target.checked })
+                            }
+                          />
+                          Obrigatório
+                        </label>
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={field.showInTable}
+                            onChange={(event) =>
+                              changeField(field.id, {
+                                showInTable: event.target.checked,
+                              })
+                            }
+                          />
+                          Na tabela
+                        </label>
+                      </div>
+
+                      <button
+                        type="button"
+                        className="icon-danger"
+                        onClick={() => void removeField(field)}
+                        aria-label="Excluir campo"
+                      >
+                        <Trash2 size={16} />
+                      </button>
                     </div>
                   ))}
-                  {!fields.length && <EmptyState icon={Database} title="Nenhum campo personalizado" text="Crie apenas campos que serão usados pela equipe e nos relatórios." />}
+                  {!fields.length && (
+                    <EmptyState
+                      icon={Database}
+                      title="Nenhum campo personalizado"
+                      text="Crie apenas campos que serão usados pela equipe e nas integrações."
+                    />
+                  )}
                 </div>
+
+                <p className="admin-field-note">
+                  Campos vinculados a um funil aparecem somente nos leads daquele
+                  processo. O identificador interno será usado futuramente no
+                  mapeamento de formulários, webhooks e integrações.
+                </p>
               </section>
 
               <section className="panel admin-section-panel">

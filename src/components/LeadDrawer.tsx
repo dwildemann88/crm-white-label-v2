@@ -20,6 +20,10 @@ import {
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useCrm } from "../app/CrmContext";
 import { canUserOwnLead } from "../core/crmConsistency";
+import {
+  customFieldAppliesToPipeline,
+  orderCustomFields,
+} from "../core/customFields";
 import { resolveLeadFields } from "../core/leadFields";
 import type {
   CustomFieldDefinition,
@@ -51,21 +55,39 @@ function InfoRow({
   );
 }
 
-function formatCustomValue(field: CustomFieldDefinition, value: unknown) {
+function formatCustomValue(
+  field: CustomFieldDefinition,
+  value: unknown,
+): ReactNode {
   if (typeof value === "boolean") return value ? "Sim" : "Não";
-  if (value === null || value === undefined || value === "") return "Não informado";
-  if (
-    typeof value === "number" &&
-    /(valor|fatura|conta|orçamento|orcamento|receita|custo)/i.test(`${field.name} ${field.key}`)
-  ) {
+  if (value === null || value === undefined || value === "") {
+    return "Não informado";
+  }
+  if (field.type === "currency" && typeof value === "number") {
     return currency(value);
   }
   if (field.type === "date") {
     try {
-      return new Intl.DateTimeFormat("pt-BR").format(new Date(`${String(value)}T12:00:00`));
+      return new Intl.DateTimeFormat("pt-BR").format(
+        new Date(`${String(value)}T12:00:00`),
+      );
     } catch {
       return String(value);
     }
+  }
+  if (field.type === "datetime") return formatDateTime(String(value));
+  if (field.type === "url") {
+    return (
+      <a href={String(value)} target="_blank" rel="noreferrer">
+        Abrir link
+      </a>
+    );
+  }
+  if (field.type === "email") {
+    return <a href={`mailto:${String(value)}`}>{String(value)}</a>;
+  }
+  if (field.type === "phone") {
+    return <a href={`tel:${String(value)}`}>{String(value)}</a>;
   }
   return String(value);
 }
@@ -166,8 +188,11 @@ export function LeadDrawer({
   const ownerHasPipelineAccess = canUserOwnLead(owner, lead.pipelineId);
   const allTags = (data?.tags || []).map((item) => item.name);
   const tagColors = Object.fromEntries((data?.tags || []).map((item) => [item.name, item.color]));
-  const customFields = (data?.customFields || []).filter(
-    (field) => field.active && lead.customValues?.[field.key] !== undefined,
+  const customFields = orderCustomFields(data?.customFields || []).filter(
+    (field) =>
+      field.active &&
+      customFieldAppliesToPipeline(field, lead.pipelineId) &&
+      lead.customValues?.[field.key] !== undefined,
   );
   const history = useMemo(
     () =>

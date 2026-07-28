@@ -16,6 +16,10 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useCrm } from "../app/CrmContext";
 import { Avatar, OriginBadge, PriorityBadge, SelectControl } from "../components/Common";
 import { canUserOwnLead } from "../core/crmConsistency";
+import {
+  customFieldAppliesToPipeline,
+  orderCustomFields,
+} from "../core/customFields";
 import type { LeadListPreset, LeadSpecialFilter } from "../core/leadFilters";
 import { resolveLeadFields } from "../core/leadFields";
 import type {
@@ -115,10 +119,45 @@ function renderStandardFieldCell(
   }
 }
 
-function customFieldValue(field: CustomFieldDefinition, lead: Lead) {
+function customFieldValue(field: CustomFieldDefinition, lead: Lead): ReactNode {
+  if (!customFieldAppliesToPipeline(field, lead.pipelineId)) return "—";
   const value = lead.customValues?.[field.key];
+  if (value === null || value === undefined || value === "") return "—";
   if (typeof value === "boolean") return value ? "Sim" : "Não";
-  return String(value ?? "—");
+  if (field.type === "currency" && typeof value === "number") {
+    return currency(value);
+  }
+  if (field.type === "date") {
+    return new Intl.DateTimeFormat("pt-BR").format(
+      new Date(`${String(value)}T12:00:00`),
+    );
+  }
+  if (field.type === "datetime") return formatDateTime(String(value));
+  if (field.type === "url") {
+    return (
+      <a href={String(value)} target="_blank" rel="noreferrer">
+        Abrir link
+      </a>
+    );
+  }
+  return String(value);
+}
+
+function customFieldExportValue(
+  field: CustomFieldDefinition,
+  lead: Lead,
+): string | number {
+  if (!customFieldAppliesToPipeline(field, lead.pipelineId)) return "";
+  const value = lead.customValues?.[field.key];
+  if (value === null || value === undefined || value === "") return "";
+  if (typeof value === "boolean") return value ? "Sim" : "Não";
+  if (field.type === "date") {
+    return new Intl.DateTimeFormat("pt-BR").format(
+      new Date(`${String(value)}T12:00:00`),
+    );
+  }
+  if (field.type === "datetime") return formatDateTime(String(value));
+  return typeof value === "number" ? value : String(value);
 }
 
 export function LeadsPage({
@@ -144,7 +183,10 @@ export function LeadsPage({
   const tableLeadFields = configuredLeadFields.filter(
     (field) => field.active && field.showInTable && field.key !== "name",
   );
-  const customFields = (data?.customFields || []).filter((field) => field.active);
+  const customFields = useMemo(
+    () => orderCustomFields((data?.customFields || []).filter((field) => field.active)),
+    [data?.customFields],
+  );
   const tableCustomFields = customFields.filter((field) => field.showInTable);
 
   const [search, setSearch] = useState(initialSearch);
@@ -365,7 +407,12 @@ export function LeadsPage({
         Etapa: stages.find((item) => item.id === lead.stageId)?.name,
         Responsável: users.find((item) => item.id === lead.ownerId)?.name,
         Etiquetas: lead.tags.join("; "),
-        ...Object.fromEntries(customFields.map((field) => [field.name, lead.customValues?.[field.key] ?? ""])),
+        ...Object.fromEntries(
+          customFields.map((field) => [
+            field.name,
+            customFieldExportValue(field, lead),
+          ]),
+        ),
       })),
     );
 

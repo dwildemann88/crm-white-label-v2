@@ -3,6 +3,10 @@ import { useEffect, useMemo, useState } from "react";
 import { useCrm } from "../app/CrmContext";
 import { eligibleLeadOwners } from "../core/crmConsistency";
 import {
+  customFieldAppliesToPipeline,
+  orderCustomFields,
+} from "../core/customFields";
+import {
   createDefaultLeadFields,
   leadFieldHasValue,
   orderLeadFields,
@@ -27,6 +31,14 @@ const defaultOrigins = [
   "Evento",
   "Entrada manual",
 ];
+
+function toDatetimeLocalValue(value: unknown): string {
+  if (value === null || value === undefined || value === "") return "";
+  const date = new Date(String(value));
+  if (Number.isNaN(date.getTime())) return String(value).slice(0, 16);
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
+}
 
 function StandardLeadField({
   field,
@@ -174,8 +186,9 @@ export function LeadModal({
   const pipelines = (data?.pipelines || []).filter((item) => item.active);
   const allStages = [...(data?.stages || [])].sort((a, b) => a.order - b.order);
   const users = (data?.users || []).filter((user) => user.active);
-  const customFields = (data?.customFields || []).filter(
-    (field) => field.active,
+  const allCustomFields = useMemo(
+    () => orderCustomFields((data?.customFields || []).filter((field) => field.active)),
+    [data?.customFields],
   );
   const tags = (data?.tags || []).map((tag) => tag.name);
   const tagColors = Object.fromEntries(
@@ -223,6 +236,15 @@ export function LeadModal({
   const stages = allStages.filter(
     (stage) => stage.pipelineId === form.pipelineId,
   );
+
+  const customFields = useMemo(
+    () =>
+      allCustomFields.filter((field) =>
+        customFieldAppliesToPipeline(field, form.pipelineId),
+      ),
+    [allCustomFields, form.pipelineId],
+  );
+
 
   useEffect(() => {
     const stageIsValid = stages.some((stage) => stage.id === form.stageId);
@@ -287,7 +309,15 @@ export function LeadModal({
         onSubmit={async (event) => {
           event.preventDefault();
           if (!valid) return;
-          await saveLead(form);
+          const applicableCustomKeys = new Set(
+            customFields.map((field) => field.key),
+          );
+          const customValues = Object.fromEntries(
+            Object.entries(form.customValues || {}).filter(([key]) =>
+              applicableCustomKeys.has(key),
+            ),
+          );
+          await saveLead({ ...form, customValues });
           onClose();
         }}
       >
@@ -373,11 +403,12 @@ export function LeadModal({
             <div className="form-grid">
               {customFields.map((field) => {
                 const value = form.customValues?.[field.key];
+                const label = `${field.name}${field.required ? " *" : ""}`;
+
                 if (field.type === "select") {
                   return (
                     <label key={field.id}>
-                      {field.name}
-                      {field.required ? " *" : ""}
+                      {label}
                       <select
                         value={String(value ?? "")}
                         required={field.required}
@@ -395,11 +426,11 @@ export function LeadModal({
                     </label>
                   );
                 }
+
                 if (field.type === "boolean") {
                   return (
                     <label key={field.id}>
-                      {field.name}
-                      {field.required ? " *" : ""}
+                      {label}
                       <select
                         value={
                           value === true
@@ -425,30 +456,75 @@ export function LeadModal({
                     </label>
                   );
                 }
+
+                if (field.type === "textarea") {
+                  return (
+                    <label className="full-field" key={field.id}>
+                      {label}
+                      <textarea
+                        value={String(value ?? "")}
+                        required={field.required}
+                        onChange={(event) =>
+                          changeCustomValue(field.key, event.target.value)
+                        }
+                      />
+                    </label>
+                  );
+                }
+
+                const inputType =
+                  field.type === "number" || field.type === "currency"
+                    ? "number"
+                    : field.type === "date"
+                      ? "date"
+                      : field.type === "datetime"
+                        ? "datetime-local"
+                        : field.type === "email"
+                          ? "email"
+                          : field.type === "phone"
+                            ? "tel"
+                            : field.type === "url"
+                              ? "url"
+                              : "text";
+
+                const inputValue =
+                  field.type === "datetime"
+                    ? toDatetimeLocalValue(value)
+                    : value === undefined
+                      ? ""
+                      : String(value);
+
                 return (
                   <label key={field.id}>
-                    {field.name}
-                    {field.required ? " *" : ""}
+                    {label}
                     <input
-                      type={
-                        field.type === "number"
-                          ? "number"
-                          : field.type === "date"
-                            ? "date"
-                            : "text"
-                      }
-                      value={value === undefined ? "" : String(value)}
+                      type={inputType}
+                      step={field.type === "currency" ? "0.01" : undefined}
+                      value={inputValue}
                       required={field.required}
-                      onChange={(event) =>
-                        changeCustomValue(
-                          field.key,
-                          field.type === "number"
-                            ? event.target.value === ""
+                      onChange={(event) => {
+                        if (field.type === "number" || field.type === "currency") {
+                          changeCustomValue(
+                            field.key,
+                            event.target.value === ""
                               ? ""
-                              : Number(event.target.value)
-                            : event.target.value,
-                        )
-                      }
+                              : Number(event.target.value),
+                          );
+                          return;
+                        }
+
+                        if (field.type === "datetime") {
+                          changeCustomValue(
+                            field.key,
+                            event.target.value
+                              ? new Date(event.target.value).toISOString()
+                              : "",
+                          );
+                          return;
+                        }
+
+                        changeCustomValue(field.key, event.target.value);
+                      }}
                     />
                   </label>
                 );

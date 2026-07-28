@@ -42,6 +42,12 @@ function readDatabase(): CrmDatabase {
       );
     }
 
+    database.customFields = (database.customFields || []).map((field, index) => ({
+      ...field,
+      position: Math.max(1, Number(field.position) || index + 1),
+      pipelineId: field.pipelineId || null,
+    }));
+
     return database;
   } catch {
     return clone(seedDatabase);
@@ -172,7 +178,10 @@ function validateCustomValues(
 ) {
   const values = input.customValues || {};
   const fields = database.customFields.filter(
-    (item) => item.organizationId === organizationId && item.active,
+    (item) =>
+      item.organizationId === organizationId &&
+      item.active &&
+      (item.pipelineId === null || item.pipelineId === input.pipelineId),
   );
   for (const field of fields) {
     const value = values[field.key];
@@ -181,7 +190,7 @@ function validateCustomValues(
       throw new Error(`Preencha o campo obrigatório: ${field.name}.`);
     if (empty) continue;
     if (
-      field.type === "number" &&
+      (field.type === "number" || field.type === "currency") &&
       (typeof value !== "number" || !Number.isFinite(value))
     ) {
       throw new Error(`O campo ${field.name} deve ser numérico.`);
@@ -191,6 +200,22 @@ function validateCustomValues(
     }
     if (field.type === "select" && !field.options.includes(String(value))) {
       throw new Error(`A opção informada em ${field.name} é inválida.`);
+    }
+    if (field.type === "email" && !validateEmail(String(value))) {
+      throw new Error(`Informe um e-mail válido em ${field.name}.`);
+    }
+    if (field.type === "phone") {
+      const phone = normalizePhone(String(value));
+      if (phone.length < 10 || phone.length > 13) {
+        throw new Error(`Informe um telefone válido em ${field.name}.`);
+      }
+    }
+    if (field.type === "url") {
+      try {
+        new URL(String(value));
+      } catch {
+        throw new Error(`Informe um link válido em ${field.name}.`);
+      }
     }
   }
 }
@@ -1153,6 +1178,8 @@ export class LocalCrmGateway implements CrmGateway {
               ),
             )
           : [],
+      position: Math.max(1, Number(field.position) || 1),
+      pipelineId: field.pipelineId || null,
     };
     if (saved.type === "select" && saved.options.length === 0) {
       throw new Error("Adicione ao menos uma opção ao campo de seleção.");
@@ -1392,6 +1419,9 @@ export class LocalCrmGateway implements CrmGateway {
           ...clone(item),
           id: uid("field"),
           organizationId,
+          pipelineId: item.pipelineId
+            ? pipelineMap.get(item.pipelineId) || null
+            : null,
         }),
       );
 
@@ -1486,6 +1516,9 @@ export class LocalCrmGateway implements CrmGateway {
             ...clone(item),
             id: uid("field"),
             organizationId,
+            pipelineId: item.pipelineId
+              ? pipelineMap.get(item.pipelineId) || null
+              : null,
           }),
         );
       database.tags
