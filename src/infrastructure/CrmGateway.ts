@@ -7,6 +7,7 @@ import type {
   LeadFieldDefinition,
   LeadInput,
   Organization,
+  OrganizationTemplateMode,
   Pipeline,
   PipelineStage,
   Session,
@@ -60,6 +61,7 @@ removeUser(session: Session, userId: string): Promise<void>;
     sourceId: string,
     name: string,
     slug: string,
+    templateMode: OrganizationTemplateMode,
   ): Promise<void>;
   switchOrganization(
     session: Session,

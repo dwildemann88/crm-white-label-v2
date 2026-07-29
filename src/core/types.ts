@@ -8,6 +8,7 @@ export type IntegrationProvider =
   | "webhook"
   | "website";
 export type IntegrationStatus = "connected" | "attention" | "disconnected";
+export type OrganizationTemplateMode = "generic" | "copy";
 export type MessageDirection = "inbound" | "outbound" | "internal";
 export type MessageType =
   | "text"

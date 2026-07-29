@@ -1809,3 +1809,55 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus
     grid-template-columns: repeat(2, minmax(180px, 1fr)) repeat(2, minmax(180px, .8fr));
   }
 }
+
+/* Seleção do modelo de provisionamento de novas organizações. */
+.organization-template-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.organization-template-option {
+  min-height: 92px;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 13px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: #fff;
+  color: #334155;
+  text-align: left;
+}
+.organization-template-option:hover {
+  border-color: #94a3b8;
+  background: #f8fafc;
+}
+.organization-template-option.active {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.1);
+  background: #eff6ff;
+  color: #1e40af;
+}
+.organization-template-option span {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.organization-template-option strong {
+  font-size: 11px;
+}
+.organization-template-option small {
+  color: #64748b;
+  font-size: 9px;
+  line-height: 1.45;
+}
+.organization-template-option.active small {
+  color: #475569;
+}
+
+@media (max-width: 620px) {
+  .organization-template-options {
+    grid-template-columns: 1fr;
+  }
+}

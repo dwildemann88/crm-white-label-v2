@@ -10,10 +10,10 @@ import {
   Settings2,
   ShieldCheck,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useCrm } from "../app/CrmContext";
 import { ModalShell, PanelHead } from "../components/Common";
-import type { Organization } from "../core/types";
+import type { Organization, OrganizationTemplateMode } from "../core/types";
 import { fileToDataUrl } from "../core/utils";
 
 function OrganizationPreview({ organization, onClose }: { organization: Organization; onClose(): void }) {
@@ -192,9 +192,17 @@ export function DeveloperPage() {
   const [selected, setSelected] = useState<Organization | null>(null);
   const [preview, setPreview] = useState<Organization | null>(null);
   const [showCreate, setShowCreate] = useState(false);
+  const [templateMode, setTemplateMode] =
+    useState<OrganizationTemplateMode>("generic");
   const [sourceId, setSourceId] = useState(organizations[0]?.id || "");
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
+
+  useEffect(() => {
+    if (!sourceId && organizations[0]?.id) {
+      setSourceId(organizations[0].id);
+    }
+  }, [organizations, sourceId]);
 
   return (
     <div className="developer-page">
@@ -269,19 +277,78 @@ export function DeveloperPage() {
             className="modal-form"
             onSubmit={async (event) => {
               event.preventDefault();
-              if (!name || !slug) return;
-              await duplicateOrganization(sourceId, name, slug);
+              const roleSourceId =
+                templateMode === "generic"
+                  ? currentOrganizationId || sourceId
+                  : sourceId;
+              if (!name || !slug || !roleSourceId) return;
+              await duplicateOrganization(
+                roleSourceId,
+                name,
+                slug,
+                templateMode,
+              );
               setShowCreate(false);
+              setTemplateMode("generic");
               setName("");
               setSlug("");
             }}
           >
-            <label className="full-field">
-              Modelo base
-              <select value={sourceId} onChange={(event) => setSourceId(event.target.value)}>
-                {organizations.map((organization) => <option key={organization.id} value={organization.id}>{organization.name}</option>)}
-              </select>
-            </label>
+            <div className="organization-template-options full-field">
+              <button
+                type="button"
+                className={
+                  templateMode === "generic"
+                    ? "organization-template-option active"
+                    : "organization-template-option"
+                }
+                onClick={() => setTemplateMode("generic")}
+              >
+                <LayoutTemplate size={19} />
+                <span>
+                  <strong>CRM genérico</strong>
+                  <small>
+                    Estrutura neutra para adaptar a qualquer segmento.
+                  </small>
+                </span>
+                {templateMode === "generic" && <Check size={17} />}
+              </button>
+
+              <button
+                type="button"
+                className={
+                  templateMode === "copy"
+                    ? "organization-template-option active"
+                    : "organization-template-option"
+                }
+                onClick={() => setTemplateMode("copy")}
+              >
+                <Copy size={19} />
+                <span>
+                  <strong>Copiar empresa existente</strong>
+                  <small>
+                    Replica funis, campos, etiquetas e configurações.
+                  </small>
+                </span>
+                {templateMode === "copy" && <Check size={17} />}
+              </button>
+            </div>
+
+            {templateMode === "copy" && (
+              <label className="full-field">
+                Empresa modelo
+                <select
+                  value={sourceId}
+                  onChange={(event) => setSourceId(event.target.value)}
+                >
+                  {organizations.map((organization) => (
+                    <option key={organization.id} value={organization.id}>
+                      {organization.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             <label className="full-field">
               Nome da empresa
               <input
@@ -299,11 +366,42 @@ export function DeveloperPage() {
             </label>
             <div className="configuration-note full-field">
               <LayoutTemplate size={17} />
-              <div><strong>Design padrão</strong><span>A nova empresa usará automaticamente o mesmo sistema visual, com nome e logo próprios.</span></div>
+              <div>
+                <strong>
+                  {templateMode === "generic"
+                    ? "Estrutura comercial neutra"
+                    : "Cópia somente da configuração"}
+                </strong>
+                <span>
+                  {templateMode === "generic"
+                    ? "Cria um funil Comercial com etapas genéricas, campos estruturais neutros e sem etiquetas ou campos personalizados."
+                    : "Leads, contatos, conversas, tarefas, mensagens, arquivos e credenciais não são copiados."}
+                </span>
+              </div>
             </div>
             <div className="modal-footer">
-              <button type="button" className="secondary-button" onClick={() => setShowCreate(false)}>Cancelar</button>
-              <button className="primary-button" disabled={!name || !slug}><Copy size={16} /> Criar empresa</button>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => setShowCreate(false)}
+              >
+                Cancelar
+              </button>
+              <button
+                className="primary-button"
+                disabled={
+                  !name ||
+                  !slug ||
+                  (templateMode === "copy" && !sourceId)
+                }
+              >
+                {templateMode === "generic" ? (
+                  <LayoutTemplate size={16} />
+                ) : (
+                  <Copy size={16} />
+                )}
+                Criar empresa
+              </button>
             </div>
           </form>
         </ModalShell>

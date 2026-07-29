@@ -19,6 +19,7 @@ import type {
   LeadInput,
   Message,
   Organization,
+  OrganizationTemplateMode,
   Pipeline,
   PipelineStage,
   Session,
@@ -70,6 +71,7 @@ savePipeline(pipeline: Pipeline): Promise<void>;
     sourceId: string,
     name: string,
     slug: string,
+    templateMode: OrganizationTemplateMode,
   ): Promise<void>;
   switchOrganization(organizationId: string): Promise<void>;
   openWhatsAppConversation(leadId: string): Promise<string>;
@@ -529,10 +531,19 @@ removeUser(userId) {
       );
     },
 
-    duplicateOrganization(sourceId, name, slug) {
+    duplicateOrganization(sourceId, name, slug, templateMode) {
       return execute(
-        () => gateway.duplicateOrganization(session!, sourceId, name, slug),
-        "Nova versão de CRM criada.",
+        () =>
+          gateway.duplicateOrganization(
+            session!,
+            sourceId,
+            name,
+            slug,
+            templateMode,
+          ),
+        templateMode === "generic"
+          ? "CRM genérico criado."
+          : "Nova versão de CRM criada.",
       );
     },
 

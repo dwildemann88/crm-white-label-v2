@@ -17,6 +17,7 @@ import type {
   MessageStatus,
   NotificationItem,
   Organization,
+  OrganizationTemplateMode,
   Pipeline,
   PipelineStage,
   RoleKey,
@@ -2322,11 +2323,13 @@ if (input.id) {
     sourceId: string,
     name: string,
     slug: string,
+    templateMode: OrganizationTemplateMode,
   ): Promise<void> {
     const { data, error } = await supabase.rpc("provision_crm_organization", {
       p_source_organization_id: sourceId,
       p_name: name.trim(),
       p_slug: toSlug(slug),
+      p_template_mode: templateMode,
     });
     if (error) {
       throw new Error(

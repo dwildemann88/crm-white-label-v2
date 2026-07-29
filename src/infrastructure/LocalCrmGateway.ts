@@ -11,6 +11,7 @@ import type {
   LeadInput,
   NotificationItem,
   Organization,
+  OrganizationTemplateMode,
   Pipeline,
   PipelineStage,
   Session,
@@ -1334,6 +1335,7 @@ export class LocalCrmGateway implements CrmGateway {
     sourceId: string,
     name: string,
     slug: string,
+    templateMode: OrganizationTemplateMode,
   ) {
     const database = readDatabase();
     const actor = currentUser(database, session);
@@ -1357,6 +1359,80 @@ export class LocalCrmGateway implements CrmGateway {
     const source = database.organizations.find((item) => item.id === sourceId);
     if (!source) throw new Error("Modelo não encontrado.");
 
+    const organizationId = uid("org");
+
+    if (templateMode === "generic") {
+      database.organizations.push({
+        id: organizationId,
+        name: normalizedName,
+        slug: normalizedSlug,
+        active: true,
+        createdAt: nowIso(),
+        enabledModules: [...source.enabledModules],
+        branding: {
+          productName: `${normalizedName} CRM`,
+          companyName: normalizedName,
+          logoUrl: "",
+          primaryColor: "#2563eb",
+          secondaryColor: "#172033",
+          accentColor: "#0ea5e9",
+          backgroundColor: "#f5f7fb",
+          loginHeadline: "Organize oportunidades, tarefas e relacionamentos em um só lugar.",
+        },
+      });
+
+      const pipelineId = uid("pipe");
+      database.pipelines.push({
+        id: pipelineId,
+        organizationId,
+        name: "Comercial",
+        description: "Funil comercial padrão para captação, qualificação e fechamento.",
+        active: true,
+      });
+
+      const genericStages: Array<{
+        name: string;
+        color: string;
+        kind: PipelineStage["kind"];
+      }> = [
+        { name: "Novos leads", color: "#f4c430", kind: "open" },
+        { name: "Qualificação", color: "#4dabf7", kind: "open" },
+        { name: "Proposta", color: "#b197fc", kind: "open" },
+        { name: "Negociação", color: "#ffa94d", kind: "open" },
+        { name: "Ganhos", color: "#38d9a9", kind: "won" },
+        { name: "Perdidos", color: "#ff8787", kind: "lost" },
+      ];
+
+      genericStages.forEach((stage, index) => {
+        database.stages.push({
+          id: uid("stage"),
+          organizationId,
+          pipelineId,
+          name: stage.name,
+          color: stage.color,
+          order: index + 1,
+          kind: stage.kind,
+        });
+      });
+
+      createDefaultLeadFields(organizationId).forEach((field) => {
+        const isOptionalPhone = field.key === "phone";
+        const isAdvancedField = ["campaign", "temperature", "score"].includes(
+          field.key,
+        );
+        database.leadFields.push({
+          ...field,
+          id: uid("lead_field"),
+          required: isOptionalPhone ? false : field.required,
+          active: isAdvancedField ? false : field.active,
+          showInTable: isAdvancedField ? false : field.showInTable,
+        });
+      });
+
+      writeDatabase(database);
+      return;
+    }
+
     // Alguns cartões podem ser apenas modelos visuais. Nesse caso, a estrutura
     // operacional é herdada da organização ativa do administrador.
     const configurationSourceId = database.pipelines.some(
@@ -1365,7 +1441,6 @@ export class LocalCrmGateway implements CrmGateway {
       ? sourceId
       : session.organizationId;
 
-    const organizationId = uid("org");
     database.organizations.push({
       ...clone(source),
       id: organizationId,

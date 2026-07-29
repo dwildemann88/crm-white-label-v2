@@ -8,6 +8,7 @@ import type {
   LeadFieldDefinition,
   LeadInput,
   Organization,
+  OrganizationTemplateMode,
   Pipeline,
   PipelineStage,
   Session,
@@ -277,12 +278,18 @@ removeUser(session: Session, userId: string) {
     sourceId: string,
     name: string,
     slug: string,
+    templateMode: OrganizationTemplateMode,
   ) {
     return this.request<void>(
       "/organizations/duplicate",
       {
         method: "POST",
-        body: JSON.stringify({ sourceId, name, slug }),
+        body: JSON.stringify({
+          sourceId,
+          name,
+          slug,
+          templateMode,
+        }),
       },
       session,
     );
