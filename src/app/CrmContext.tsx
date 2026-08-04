@@ -14,10 +14,12 @@ import type {
   Branding,
   CustomFieldDefinition,
   IntegrationConnection,
+  IntegrationSecretResult,
   Lead,
   LeadFieldDefinition,
   LeadInput,
   Message,
+  NewWebhookIntegrationInput,
   Organization,
   OrganizationTemplateMode,
   Pipeline,
@@ -87,7 +89,14 @@ savePipeline(pipeline: Pipeline): Promise<void>;
   transferConversation(conversationId: string, userId: string): Promise<void>;
   markConversationRead(conversationId: string): Promise<void>;
   markNotificationRead(notificationId?: string): Promise<void>;
+  createWebhookIntegration(
+    input: NewWebhookIntegrationInput,
+  ): Promise<IntegrationSecretResult>;
   updateIntegration(integration: IntegrationConnection): Promise<void>;
+  rotateIntegrationSecret(
+    integrationId: string,
+  ): Promise<IntegrationSecretResult>;
+  deleteIntegration(integrationId: string): Promise<void>;
   testIntegration(integrationId: string): Promise<void>;
   resetDemo(): Promise<void>;
 }
@@ -298,6 +307,32 @@ useEffect(() => {
         await action();
         await load(session);
         if (success) setToastState(success);
+      } catch (caught) {
+        const message =
+          caught instanceof Error
+            ? caught.message
+            : "Não foi possível concluir a operação.";
+
+        setError(message);
+        throw caught;
+      } finally {
+        setBusy(false);
+      }
+    },
+    [load, session],
+  );
+
+  const executeResult = useCallback(
+    async <T,>(action: () => Promise<T>, success?: string): Promise<T> => {
+      if (!session) throw new Error("Sessão não encontrada.");
+      setBusy(true);
+      setError("");
+
+      try {
+        const result = await action();
+        await load(session);
+        if (success) setToastState(success);
+        return result;
       } catch (caught) {
         const message =
           caught instanceof Error
@@ -951,10 +986,31 @@ removeUser(userId) {
       );
     },
 
+    createWebhookIntegration(input) {
+      return executeResult(
+        () => gateway.createWebhookIntegration(session!, input),
+        "Integração criada. Guarde a credencial exibida.",
+      );
+    },
+
     updateIntegration(integration) {
       return execute(
         () => gateway.updateIntegration(session!, integration),
         "Integração atualizada.",
+      );
+    },
+
+    rotateIntegrationSecret(integrationId) {
+      return executeResult(
+        () => gateway.rotateIntegrationSecret(session!, integrationId),
+        "Nova credencial gerada.",
+      );
+    },
+
+    deleteIntegration(integrationId) {
+      return execute(
+        () => gateway.deleteIntegration(session!, integrationId),
+        "Integração removida.",
       );
     },
 

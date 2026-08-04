@@ -8,6 +8,11 @@ export type IntegrationProvider =
   | "webhook"
   | "website";
 export type IntegrationStatus = "connected" | "attention" | "disconnected";
+export type IntegrationDuplicateRule =
+  | "external_or_contact"
+  | "external_id"
+  | "phone_or_email"
+  | "always_create";
 export type OrganizationTemplateMode = "generic" | "copy";
 export type MessageDirection = "inbound" | "outbound" | "internal";
 export type MessageType =
@@ -112,6 +117,14 @@ export interface Pipeline {
   organizationId: string;
   name: string;
   description: string;
+  active: boolean;
+}
+
+export interface LeadSourceDefinition {
+  id: string;
+  organizationId: string;
+  name: string;
+  code: string;
   active: boolean;
 }
 
@@ -289,6 +302,24 @@ export interface IntegrationFieldMap {
   target: string;
 }
 
+export interface NewWebhookIntegrationInput {
+  name: string;
+  description: string;
+  targetPipelineId: string;
+  targetStageId: string;
+  sourceId: string;
+  defaultOwnerId: string | null;
+  duplicateRule: IntegrationDuplicateRule;
+  fieldMappings: IntegrationFieldMap[];
+  active: boolean;
+}
+
+export interface IntegrationSecretResult {
+  integrationId: string;
+  publicKey: string;
+  secret: string;
+}
+
 export interface IntegrationConnection {
   id: string;
   organizationId: string;
@@ -298,10 +329,14 @@ export interface IntegrationConnection {
   status: IntegrationStatus;
   accountLabel: string;
   endpoint: string;
+  publicKey: string;
   secretMasked: string;
   targetPipelineId: string;
   targetStageId: string;
+  sourceId: string;
   defaultOwnerId: string | null;
+  duplicateRule: IntegrationDuplicateRule;
+  active: boolean;
   fieldMappings: IntegrationFieldMap[];
   lastEventAt: string | null;
   lastTestAt: string | null;
@@ -324,6 +359,7 @@ export interface CrmDatabase {
   users: User[];
   pipelines: Pipeline[];
   stages: PipelineStage[];
+  leadSources: LeadSourceDefinition[];
   leads: Lead[];
   histories: LeadHistory[];
   tasks: Task[];

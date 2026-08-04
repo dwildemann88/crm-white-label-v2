@@ -4,6 +4,8 @@ import type {
   Branding,
   CustomFieldDefinition,
   IntegrationConnection,
+  IntegrationSecretResult,
+  NewWebhookIntegrationInput,
   Lead,
   LeadFieldDefinition,
   LeadInput,
@@ -369,6 +371,20 @@ openWhatsAppConversation(
     );
   }
 
+  createWebhookIntegration(
+    session: Session,
+    input: NewWebhookIntegrationInput,
+  ) {
+    return this.request<IntegrationSecretResult>(
+      "/integrations/webhooks",
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+      session,
+    );
+  }
+
   updateIntegration(session: Session, integration: IntegrationConnection) {
     return this.request<void>(
       `/integrations/${integration.id}`,
@@ -376,6 +392,28 @@ openWhatsAppConversation(
         method: "PUT",
         body: JSON.stringify(integration),
       },
+      session,
+    );
+  }
+
+  rotateIntegrationSecret(
+    session: Session,
+    integrationId: string,
+  ) {
+    return this.request<IntegrationSecretResult>(
+      `/integrations/${integrationId}/rotate-secret`,
+      { method: "POST" },
+      session,
+    );
+  }
+
+  deleteIntegration(
+    session: Session,
+    integrationId: string,
+  ) {
+    return this.request<void>(
+      `/integrations/${integrationId}`,
+      { method: "DELETE" },
       session,
     );
   }

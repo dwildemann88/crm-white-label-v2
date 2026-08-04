@@ -7,6 +7,9 @@ import type {
   CustomFieldType,
   CustomFieldValue,
   IntegrationConnection,
+  IntegrationSecretResult,
+  LeadSourceDefinition,
+  NewWebhookIntegrationInput,
   Lead,
   LeadHistory,
   LeadFieldDefinition,
@@ -603,6 +606,9 @@ export class SupabaseCrmGateway implements CrmGateway {
     if (!membership) throw new Error("Empresa da sessão não encontrada.");
 
     const organizationId = membership.organization.id;
+    const canManageIntegrations =
+      bootstrap.user.is_platform_admin === true ||
+      membership.permissions.includes("integrations.manage");
 
     const [
       members,
@@ -611,6 +617,7 @@ export class SupabaseCrmGateway implements CrmGateway {
   stagesData,
   contactsData,
   sourcesData,
+  integrationsData,
   leadsData,
   tagsData,
   leadTagsData,
@@ -665,9 +672,17 @@ export class SupabaseCrmGateway implements CrmGateway {
       requireData<any[]>(
         supabase
           .from("lead_sources")
-          .select("id,name")
-          .eq("organization_id", organizationId),
+          .select("id,organization_id,name,code,is_active")
+          .eq("organization_id", organizationId)
+          .order("name"),
       ),
+      canManageIntegrations
+        ? requireData<any[]>(
+            supabase.rpc("list_crm_webhook_integrations", {
+              p_organization_id: organizationId,
+            }),
+          )
+        : Promise.resolve([]),
       requireData<any[]>(
         supabase
           .from("leads")
@@ -905,6 +920,14 @@ export class SupabaseCrmGateway implements CrmGateway {
       color: item.color,
       order: item.position,
       kind: item.category,
+    }));
+
+    const leadSources: LeadSourceDefinition[] = sourcesData.map((item) => ({
+      id: item.id,
+      organizationId: item.organization_id,
+      name: item.name,
+      code: item.code,
+      active: item.is_active,
     }));
 
     const contactsById = new Map(contactsData.map((item) => [item.id, item]));
@@ -1300,6 +1323,54 @@ for (const reminder of remindersData) {
       };
     });
 
+    const integrations: IntegrationConnection[] = integrationsData.map(
+      (item) => ({
+        id: item.id,
+        organizationId: item.organization_id,
+        provider: "webhook" as const,
+        name: item.name,
+        description: item.description ?? "",
+        status: item.status,
+        accountLabel: item.account_label ?? "Webhook genérico",
+        endpoint: "/functions/v1/receive-crm-lead",
+        publicKey: item.public_key,
+        secretMasked: item.secret_masked,
+        targetPipelineId: item.target_pipeline_id,
+        targetStageId: item.target_stage_id,
+        sourceId: item.source_id,
+        defaultOwnerId: item.default_owner_id,
+        duplicateRule: item.duplicate_rule,
+        active: item.active,
+        fieldMappings: Array.isArray(item.field_mappings)
+          ? item.field_mappings
+              .map((mapping: unknown) => {
+                const record =
+                  mapping && typeof mapping === "object" && !Array.isArray(mapping)
+                    ? (mapping as Record<string, unknown>)
+                    : {};
+                return {
+                  source:
+                    typeof record.source === "string" ? record.source : "",
+                  target:
+                    typeof record.target === "string" ? record.target : "",
+                };
+              })
+              .filter(
+                (mapping: { source: string; target: string }) =>
+                  mapping.source && mapping.target,
+              )
+          : [],
+        lastEventAt: item.last_event_at ?? null,
+        lastTestAt: null,
+        eventsReceived: Number(item.events_received ?? 0),
+        errors: Array.isArray(item.errors)
+          ? item.errors.filter((error: unknown): error is string =>
+              typeof error === "string",
+            )
+          : [],
+      }),
+    );
+
     const notifications: NotificationItem[] = notificationsData.map((item) => ({
       id: item.id,
       organizationId: item.organization_id,
@@ -1316,6 +1387,7 @@ for (const reminder of remindersData) {
       users,
       pipelines,
       stages,
+      leadSources,
       leads,
       histories,
       tasks,
@@ -1324,7 +1396,7 @@ for (const reminder of remindersData) {
       tags,
       conversations,
       messages,
-      integrations: [],
+      integrations,
       notifications,
     };
   }
@@ -3001,14 +3073,168 @@ if (input.id) {
     );
   }
 }
-  updateIntegration(
-    _session: Session,
-    _integration: IntegrationConnection,
-  ): Promise<void> {
-    return Promise.reject(notReady("Configuração de integrações"));
+  async createWebhookIntegration(
+    session: Session,
+    input: NewWebhookIntegrationInput,
+  ): Promise<IntegrationSecretResult> {
+    const { data, error } = await supabase.rpc(
+      "create_crm_webhook_integration",
+      {
+        p_organization_id: session.organizationId,
+        p_name: input.name.trim(),
+        p_description: input.description.trim(),
+        p_pipeline_id: input.targetPipelineId,
+        p_stage_id: input.targetStageId,
+        p_source_id: input.sourceId,
+        p_default_owner_id: input.defaultOwnerId,
+        p_duplicate_rule: input.duplicateRule,
+        p_field_mappings: input.fieldMappings,
+        p_active: input.active,
+      },
+    );
+
+    if (error) throw new Error(error.message);
+
+    const result = data as {
+      created?: boolean;
+      integration_id?: string;
+      public_key?: string;
+      secret?: string;
+    };
+
+    if (
+      result.created !== true ||
+      !result.integration_id ||
+      !result.public_key ||
+      !result.secret
+    ) {
+      throw new Error(
+        "O banco não confirmou a criação da integração.",
+      );
+    }
+
+    return {
+      integrationId: result.integration_id,
+      publicKey: result.public_key,
+      secret: result.secret,
+    };
   }
-  testIntegration(_session: Session, _integrationId: string): Promise<void> {
-    return Promise.reject(notReady("Teste de integrações"));
+
+  async updateIntegration(
+    session: Session,
+    integration: IntegrationConnection,
+  ): Promise<void> {
+    const { data, error } = await supabase.rpc(
+      "update_crm_webhook_integration",
+      {
+        p_organization_id: session.organizationId,
+        p_integration_id: integration.id,
+        p_name: integration.name.trim(),
+        p_description: integration.description.trim(),
+        p_pipeline_id: integration.targetPipelineId,
+        p_stage_id: integration.targetStageId,
+        p_source_id: integration.sourceId,
+        p_default_owner_id: integration.defaultOwnerId,
+        p_duplicate_rule: integration.duplicateRule,
+        p_field_mappings: integration.fieldMappings,
+        p_active: integration.active,
+      },
+    );
+
+    if (error) throw new Error(error.message);
+
+    const result = data as {
+      updated?: boolean;
+      integration_id?: string;
+    };
+
+    if (
+      result.updated !== true ||
+      result.integration_id !== integration.id
+    ) {
+      throw new Error(
+        "O banco não confirmou a atualização da integração.",
+      );
+    }
+  }
+
+  async rotateIntegrationSecret(
+    session: Session,
+    integrationId: string,
+  ): Promise<IntegrationSecretResult> {
+    const { data, error } = await supabase.rpc(
+      "rotate_crm_webhook_secret",
+      {
+        p_organization_id: session.organizationId,
+        p_integration_id: integrationId,
+      },
+    );
+
+    if (error) throw new Error(error.message);
+
+    const result = data as {
+      rotated?: boolean;
+      integration_id?: string;
+      public_key?: string;
+      secret?: string;
+    };
+
+    if (
+      result.rotated !== true ||
+      result.integration_id !== integrationId ||
+      !result.public_key ||
+      !result.secret
+    ) {
+      throw new Error(
+        "O banco não confirmou a rotação da credencial.",
+      );
+    }
+
+    return {
+      integrationId,
+      publicKey: result.public_key,
+      secret: result.secret,
+    };
+  }
+
+  async deleteIntegration(
+    session: Session,
+    integrationId: string,
+  ): Promise<void> {
+    const { data, error } = await supabase.rpc(
+      "delete_crm_webhook_integration",
+      {
+        p_organization_id: session.organizationId,
+        p_integration_id: integrationId,
+      },
+    );
+
+    if (error) throw new Error(error.message);
+
+    const result = data as {
+      deleted?: boolean;
+      integration_id?: string;
+    };
+
+    if (
+      result.deleted !== true ||
+      result.integration_id !== integrationId
+    ) {
+      throw new Error(
+        "O banco não confirmou a exclusão da integração.",
+      );
+    }
+  }
+
+  testIntegration(
+    _session: Session,
+    _integrationId: string,
+  ): Promise<void> {
+    return Promise.reject(
+      new Error(
+        "O teste ficará disponível após a publicação do receptor de webhooks.",
+      ),
+    );
   }
   resetDemo(): Promise<void> {
     return Promise.resolve();

@@ -1861,3 +1861,163 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus
     grid-template-columns: 1fr;
   }
 }
+
+/* Etapa 4A.1 — configuração real de webhooks por organização */
+.integration-message.warning {
+  background: #fffbeb;
+  color: #92400e;
+  border: 1px solid #fde68a;
+}
+
+.webhook-stage-notice {
+  align-items: center;
+  padding: 12px 14px;
+}
+
+.mapping-list-selects select,
+.mapping-list-selects input {
+  width: 100%;
+}
+
+.mapping-list-selects .input-error {
+  border-color: #ef4444;
+  box-shadow: 0 0 0 2px rgb(239 68 68 / 10%);
+}
+
+.mapping-list-selects .add-mapping {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.field-help {
+  display: block;
+  margin-top: 5px;
+  color: var(--text-muted);
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.integration-modal-actions {
+  flex-wrap: wrap;
+}
+
+.integration-modal-actions .danger-button {
+  margin-right: auto;
+}
+
+.webhook-secret-layout {
+  display: grid;
+  gap: 12px;
+}
+
+.credential-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.credential-field > div {
+  min-width: 0;
+}
+
+.credential-field small {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--text-muted);
+  font-size: 9px;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.credential-field code {
+  display: block;
+  overflow-wrap: anywhere;
+  color: var(--text-strong);
+  font-size: 11px;
+}
+
+.credential-field button {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  color: #475569;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.credential-secret {
+  border-color: #fbbf24;
+  background: #fffbeb;
+}
+
+.integration-empty-card {
+  min-height: 300px;
+}
+
+.integration-empty-card .integration-card-content {
+  align-items: flex-start;
+  justify-content: center;
+}
+
+.integration-empty-card h3 {
+  color: var(--text-strong);
+  font-size: 14px;
+}
+
+.integration-empty-card p {
+  max-width: 360px;
+  color: var(--text-muted);
+  font-size: 10.5px;
+  line-height: 1.55;
+}
+
+.webhook-doc-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.webhook-doc-header span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-strong);
+}
+
+.technical-webhook-doc pre {
+  margin: 0;
+  padding: 14px;
+  overflow-x: auto;
+  border-radius: 10px;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+@media (max-width: 720px) {
+  .credential-field {
+    grid-template-columns: 1fr;
+  }
+
+  .credential-field button {
+    justify-self: start;
+  }
+
+  .integration-modal-actions .danger-button {
+    margin-right: 0;
+  }
+}

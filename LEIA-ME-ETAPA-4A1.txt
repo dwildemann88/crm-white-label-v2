@@ -1,0 +1,57 @@
+ETAPA 4A.1 — CONFIGURAÇÃO SEGURA DE WEBHOOKS
+
+OBJETIVO
+Criar a base real de integrações de entrada de leads por organização, sem alterar
+as Edge Functions existentes do WhatsApp.
+
+ESTA ETAPA ENTREGA
+- tabela segura de configurações de webhook por organização;
+- identificador público e chave secreta individual por integração;
+- armazenamento somente do hash da chave;
+- criação, edição, rotação e exclusão de credenciais;
+- configuração de funil, etapa, origem e responsável padrão;
+- regra de duplicidade;
+- mapeamento para campos padrão, campos personalizados e dados técnicos;
+- estrutura de auditoria para eventos futuros;
+- tela real em Integrações, substituindo os cartões demonstrativos;
+- isolamento por organização e permissão integrations.manage.
+
+NÃO ENTREGA AINDA
+- recebimento público de leads;
+- teste de envio;
+- conexão direta com Meta Ads ou Google Ads.
+
+O endpoint receive-crm-lead será publicado na Etapa 4A.2. Nesta etapa, a tela
+informa explicitamente que a configuração está pronta, mas o receptor ainda não
+está ativo.
+
+ORDEM OBRIGATÓRIA
+1. Copiar os arquivos para a raiz do projeto.
+2. Executar npm run typecheck.
+3. Aplicar no SQL Editor:
+   supabase/migrations/202607310001_crm_webhook_integrations.sql
+4. Executar npm run dev.
+5. Criar um webhook de teste e guardar a chave exibida.
+
+SEGURANÇA
+- a chave secreta aparece somente na criação ou rotação;
+- a tabela não é exposta diretamente ao navegador;
+- o frontend recebe apenas a máscara da chave;
+- o receptor futuro poderá resolver a configuração somente com service_role;
+- nenhum código ou função de WhatsApp foi alterado.
+
+VALIDAÇÕES EXECUTADAS
+- npm run typecheck: aprovado
+- npm run verify: aprovado
+
+ARQUIVOS ALTERADOS
+- supabase/migrations/202607310001_crm_webhook_integrations.sql
+- src/core/types.ts
+- src/data/seed.ts
+- src/infrastructure/CrmGateway.ts
+- src/infrastructure/LocalCrmGateway.ts
+- src/infrastructure/RestCrmGateway.ts
+- src/infrastructure/SupabaseCrmGateway.ts
+- src/app/CrmContext.tsx
+- src/pages/IntegrationsPage.tsx
+- src/ui-system.css

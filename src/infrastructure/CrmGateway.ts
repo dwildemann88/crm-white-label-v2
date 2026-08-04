@@ -3,6 +3,8 @@ import type {
   Branding,
   CustomFieldDefinition,
   IntegrationConnection,
+  IntegrationSecretResult,
+  NewWebhookIntegrationInput,
   Lead,
   LeadFieldDefinition,
   LeadInput,
@@ -100,9 +102,21 @@ openWhatsAppConversation(
     notificationId?: string,
   ): Promise<void>;
 
+  createWebhookIntegration(
+    session: Session,
+    input: NewWebhookIntegrationInput,
+  ): Promise<IntegrationSecretResult>;
   updateIntegration(
     session: Session,
     integration: IntegrationConnection,
+  ): Promise<void>;
+  rotateIntegrationSecret(
+    session: Session,
+    integrationId: string,
+  ): Promise<IntegrationSecretResult>;
+  deleteIntegration(
+    session: Session,
+    integrationId: string,
   ): Promise<void>;
   testIntegration(session: Session, integrationId: string): Promise<void>;
 

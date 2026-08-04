@@ -6,6 +6,8 @@ import type {
   CustomFieldDefinition,
   CrmDatabase,
   IntegrationConnection,
+  IntegrationSecretResult,
+  NewWebhookIntegrationInput,
   Lead,
   LeadFieldDefinition,
   LeadInput,
@@ -36,6 +38,10 @@ function readDatabase(): CrmDatabase {
     const database = raw
       ? (JSON.parse(raw) as CrmDatabase)
       : clone(seedDatabase);
+
+    if (!Array.isArray(database.leadSources)) {
+      database.leadSources = clone(seedDatabase.leadSources);
+    }
 
     if (!Array.isArray(database.leadFields)) {
       database.leadFields = database.organizations.flatMap((organization) =>
@@ -325,6 +331,9 @@ export class LocalCrmGateway implements CrmGateway {
       ),
       stages: database.stages.filter(
         (item) => item.organizationId === organizationId,
+      ),
+      leadSources: database.leadSources.filter(
+        (item) => item.organizationId === organizationId && item.active,
       ),
       leads: scopedLeads,
       histories: database.histories.filter(
@@ -1415,6 +1424,24 @@ export class LocalCrmGateway implements CrmGateway {
         });
       });
 
+      [
+        ["Entrada manual", "manual"],
+        ["Site", "website"],
+        ["Indicação", "referral"],
+        ["Meta Ads", "meta_ads"],
+        ["Google Ads", "google_ads"],
+        ["WhatsApp", "whatsapp"],
+        ["Outros", "other"],
+      ].forEach(([sourceName, sourceCode]) => {
+        database.leadSources.push({
+          id: uid("source"),
+          organizationId,
+          name: sourceName,
+          code: sourceCode,
+          active: true,
+        });
+      });
+
       createDefaultLeadFields(organizationId).forEach((field) => {
         const isOptionalPhone = field.key === "phone";
         const isAdvancedField = ["campaign", "temperature", "score"].includes(
@@ -1477,6 +1504,16 @@ export class LocalCrmGateway implements CrmGateway {
         });
       });
 
+    database.leadSources
+      .filter((item) => item.organizationId === configurationSourceId)
+      .forEach((item) =>
+        database.leadSources.push({
+          ...clone(item),
+          id: uid("source"),
+          organizationId,
+        }),
+      );
+
     database.leadFields
       .filter((item) => item.organizationId === configurationSourceId)
       .forEach((item) =>
@@ -1506,31 +1543,6 @@ export class LocalCrmGateway implements CrmGateway {
         database.tags.push({ ...clone(item), id: uid("tag"), organizationId }),
       );
 
-    database.integrations
-      .filter((item) => item.organizationId === configurationSourceId)
-      .forEach((item) =>
-        database.integrations.push({
-          ...clone(item),
-          id: uid("integration"),
-          organizationId,
-          status: "disconnected",
-          accountLabel: "Aguardando conexão",
-          secretMasked: "",
-          targetPipelineId:
-            pipelineMap.get(item.targetPipelineId) ||
-            Array.from(pipelineMap.values())[0] ||
-            "",
-          targetStageId:
-            stageMap.get(item.targetStageId) ||
-            Array.from(stageMap.values())[0] ||
-            "",
-          defaultOwnerId: null,
-          lastEventAt: null,
-          lastTestAt: null,
-          eventsReceived: 0,
-          errors: [],
-        }),
-      );
 
     writeDatabase(database);
   }
@@ -1574,6 +1586,15 @@ export class LocalCrmGateway implements CrmGateway {
             pipelineId: pipelineMap.get(item.pipelineId) || item.pipelineId,
           });
         });
+      database.leadSources
+        .filter((item) => item.organizationId === sourceId)
+        .forEach((item) =>
+          database.leadSources.push({
+            ...clone(item),
+            id: uid("source"),
+            organizationId,
+          }),
+        );
       database.leadFields
         .filter((item) => item.organizationId === sourceId)
         .forEach((item) =>
@@ -1603,31 +1624,6 @@ export class LocalCrmGateway implements CrmGateway {
             ...clone(item),
             id: uid("tag"),
             organizationId,
-          }),
-        );
-      database.integrations
-        .filter((item) => item.organizationId === sourceId)
-        .forEach((item) =>
-          database.integrations.push({
-            ...clone(item),
-            id: uid("integration"),
-            organizationId,
-            status: "disconnected",
-            accountLabel: "Aguardando conexão",
-            secretMasked: "",
-            targetPipelineId:
-              pipelineMap.get(item.targetPipelineId) ||
-              Array.from(pipelineMap.values())[0] ||
-              "",
-            targetStageId:
-              stageMap.get(item.targetStageId) ||
-              Array.from(stageMap.values())[0] ||
-              "",
-            defaultOwnerId: null,
-            lastEventAt: null,
-            lastTestAt: null,
-            eventsReceived: 0,
-            errors: [],
           }),
         );
     }
@@ -1937,6 +1933,70 @@ async openWhatsAppConversation(
     writeDatabase(database);
   }
 
+  async createWebhookIntegration(
+    session: Session,
+    input: NewWebhookIntegrationInput,
+  ): Promise<IntegrationSecretResult> {
+    const database = readDatabase();
+    const actor = currentUser(database, session);
+
+    if (!can(actor, "integrations.manage")) {
+      throw new Error("Sem permissão para gerenciar integrações.");
+    }
+
+    const name = input.name.trim();
+    if (name.length < 2) {
+      throw new Error("Informe o nome da integração.");
+    }
+
+    const source = database.leadSources.find(
+      (item) =>
+        item.id === input.sourceId &&
+        item.organizationId === session.organizationId &&
+        item.active,
+    );
+    if (!source) throw new Error("Origem inválida.");
+
+    const publicKey = `whk_${uid("local").replace(/[^a-z0-9]/gi, "").slice(-20)}`;
+    const secret = `crm_${uid("secret")}${uid("secret")}`;
+    const integrationId = uid("integration");
+
+    const integration: IntegrationConnection = {
+      id: integrationId,
+      organizationId: session.organizationId,
+      provider: "webhook",
+      name,
+      description: input.description.trim(),
+      status: input.active ? "attention" : "disconnected",
+      accountLabel: source.name,
+      endpoint: "/functions/v1/receive-crm-lead",
+      publicKey,
+      secretMasked: `••••••••••••${secret.slice(-4)}`,
+      targetPipelineId: input.targetPipelineId,
+      targetStageId: input.targetStageId,
+      sourceId: input.sourceId,
+      defaultOwnerId: input.defaultOwnerId,
+      duplicateRule: input.duplicateRule,
+      active: input.active,
+      fieldMappings: input.fieldMappings.map((mapping) => ({
+        source: mapping.source.trim(),
+        target: mapping.target.trim(),
+      })),
+      lastEventAt: null,
+      lastTestAt: null,
+      eventsReceived: 0,
+      errors: [],
+    };
+
+    await this.updateIntegration(session, integration);
+
+    return {
+      integrationId,
+      publicKey,
+      secret,
+    };
+  }
+
   async updateIntegration(
     session: Session,
     integration: IntegrationConnection,
@@ -1960,6 +2020,19 @@ async openWhatsAppConversation(
         item.pipelineId === integration.targetPipelineId,
     );
     if (!pipeline || !stage) throw new Error("Destino da integração inválido.");
+
+    const source = database.leadSources.find(
+      (item) =>
+        item.id === integration.sourceId &&
+        item.organizationId === session.organizationId &&
+        item.active,
+    );
+    if (!source) throw new Error("Origem inválida.");
+
+    if (!integration.fieldMappings.some((item) => item.target === "name")) {
+      throw new Error("O mapeamento precisa preencher o campo Nome.");
+    }
+
     if (integration.defaultOwnerId) {
       const owner = database.users.find(
         (item) =>
@@ -1987,7 +2060,8 @@ async openWhatsAppConversation(
     const saved = {
       ...integration,
       name: integration.name.trim(),
-      accountLabel: integration.accountLabel.trim(),
+      accountLabel: source.name,
+      status: integration.active ? integration.status : "disconnected",
       fieldMappings: mappings,
       organizationId: session.organizationId,
     };
@@ -2000,29 +2074,61 @@ async openWhatsAppConversation(
     writeDatabase(database);
   }
 
-  async testIntegration(session: Session, integrationId: string) {
+  async rotateIntegrationSecret(
+    session: Session,
+    integrationId: string,
+  ): Promise<IntegrationSecretResult> {
     const database = readDatabase();
     const actor = currentUser(database, session);
-    if (!can(actor, "integrations.manage"))
-      throw new Error("Sem permissão para testar integrações.");
+    if (!can(actor, "integrations.manage")) {
+      throw new Error("Sem permissão para gerenciar integrações.");
+    }
+
     const integration = database.integrations.find(
       (item) =>
         item.id === integrationId &&
         item.organizationId === session.organizationId,
     );
     if (!integration) throw new Error("Integração não encontrada.");
-    integration.lastTestAt = nowIso();
-    integration.status = "connected";
+
+    const secret = `crm_${uid("secret")}${uid("secret")}`;
+    integration.secretMasked = `••••••••••••${secret.slice(-4)}`;
     integration.errors = [];
-    integration.eventsReceived += 1;
-    notify(
-      database,
-      session.organizationId,
-      "Integração testada",
-      `${integration.name} respondeu corretamente.`,
-      actor.id,
-    );
     writeDatabase(database);
+
+    return {
+      integrationId,
+      publicKey: integration.publicKey,
+      secret,
+    };
+  }
+
+  async deleteIntegration(
+    session: Session,
+    integrationId: string,
+  ): Promise<void> {
+    const database = readDatabase();
+    const actor = currentUser(database, session);
+    if (!can(actor, "integrations.manage")) {
+      throw new Error("Sem permissão para gerenciar integrações.");
+    }
+
+    const before = database.integrations.length;
+    database.integrations = database.integrations.filter(
+      (item) =>
+        item.id !== integrationId ||
+        item.organizationId !== session.organizationId,
+    );
+    if (database.integrations.length === before) {
+      throw new Error("Integração não encontrada.");
+    }
+    writeDatabase(database);
+  }
+
+  async testIntegration(_session: Session, _integrationId: string) {
+    throw new Error(
+      "O teste ficará disponível após a publicação do receptor de webhooks.",
+    );
   }
 
   async resetDemo() {
