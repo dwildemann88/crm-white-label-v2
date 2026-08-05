@@ -13,6 +13,7 @@ import {
   Phone,
   Plus,
   Tag,
+  Trash2,
   UserCog,
   X,
   type LucideIcon,
@@ -138,12 +139,16 @@ export function LeadDrawer({
   onEdit,
   onTask,
   onWhatsApp,
+  onMove,
+  onDelete,
 }: {
   lead: Lead;
   onClose(): void;
   onEdit(): void;
   onTask(): void;
   onWhatsApp(): void;
+  onMove(stageId: string): void;
+  onDelete(): void;
 }) {
   const { data, addLeadNote, saveLead, saveTag, can } = useCrm();
   const [note, setNote] = useState("");
@@ -185,6 +190,9 @@ export function LeadDrawer({
   const owner = data?.users.find((item) => item.id === lead.ownerId);
   const pipeline = data?.pipelines.find((item) => item.id === lead.pipelineId);
   const stage = data?.stages.find((item) => item.id === lead.stageId);
+  const pipelineStages = [...(data?.stages || [])]
+    .filter((item) => item.pipelineId === lead.pipelineId)
+    .sort((a, b) => a.order - b.order);
   const ownerHasPipelineAccess = canUserOwnLead(owner, lead.pipelineId);
   const allTags = (data?.tags || []).map((item) => item.name);
   const tagColors = Object.fromEntries((data?.tags || []).map((item) => [item.name, item.color]));
@@ -271,6 +279,11 @@ export function LeadDrawer({
               <Edit3 size={17} /> Editar
             </button>
           )}
+          {can("leads.delete") && (
+            <button className="danger-button" onClick={onDelete}>
+              <Trash2 size={17} /> Excluir
+            </button>
+          )}
         </div>
 
         <div className="drawer-body">
@@ -302,9 +315,24 @@ export function LeadDrawer({
               </div>
               <div className="context-stage">
                 <small>Etapa atual</small>
-                <span className="stage-pill" style={{ "--stage-color": stage?.color || "#94a3b8" } as React.CSSProperties}>
-                  <i /> {stage?.name || "Etapa não identificada"}
-                </span>
+                {can("pipeline.move") ? (
+                  <label className="drawer-stage-select" style={{ "--stage-color": stage?.color || "#94a3b8" } as React.CSSProperties}>
+                    <i />
+                    <select
+                      value={lead.stageId}
+                      aria-label="Mover lead para outra etapa"
+                      onChange={(event) => onMove(event.target.value)}
+                    >
+                      {pipelineStages.map((item) => (
+                        <option key={item.id} value={item.id}>{item.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                ) : (
+                  <span className="stage-pill" style={{ "--stage-color": stage?.color || "#94a3b8" } as React.CSSProperties}>
+                    <i /> {stage?.name || "Etapa não identificada"}
+                  </span>
+                )}
                 <em>{pipeline?.name || "Funil não identificado"}</em>
               </div>
             </div>
@@ -328,6 +356,15 @@ export function LeadDrawer({
                 />
               ))}
               <InfoRow icon={Clock3} label="Última atualização" value={formatDateTime(lead.updatedAt)} />
+            </section>
+          )}
+
+          {lead.lostReason && (
+            <section className="drawer-section loss-reason-section">
+              <div className="section-title-row">
+                <div><h3>Justificativa da perda</h3><p>Motivo informado ao encerrar esta oportunidade.</p></div>
+              </div>
+              <p>{lead.lostReason}</p>
             </section>
           )}
 

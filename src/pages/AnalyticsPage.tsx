@@ -254,6 +254,7 @@ export function AnalyticsPage({ onOpenLeads }: AnalyticsPageProps) {
         leads: leads.length,
         pipeline: leads.filter((lead) => stageById.get(lead.stageId)?.kind === "open").reduce((sum, lead) => sum + lead.value, 0),
         won: sourceWon.length,
+        sold: sourceWon.reduce((sum, lead) => sum + lead.value, 0),
         conversion: percent(sourceWon.length, sourceWon.length + sourceLost.length),
       };
     })
@@ -280,6 +281,7 @@ export function AnalyticsPage({ onOpenLeads }: AnalyticsPageProps) {
         active: active.length,
         pipeline: active.reduce((sum, lead) => sum + lead.value, 0),
         won: ownerWon.length,
+        sold: ownerWon.reduce((sum, lead) => sum + lead.value, 0),
         conversion: percent(ownerWon.length, ownerWon.length + ownerLost.length),
         overdue,
         inconsistent,
@@ -350,12 +352,22 @@ export function AnalyticsPage({ onOpenLeads }: AnalyticsPageProps) {
       row.Etapa = allStages.find((stage) => stage.id === lead.stageId)?.name;
       row.Responsável = users.find((user) => user.id === lead.ownerId)?.name;
       if (valueActive) row[fieldLabel("value")] = lead.value;
+      row.Resultado = stageById.get(lead.stageId)?.kind === "won"
+        ? "Ganho"
+        : stageById.get(lead.stageId)?.kind === "lost"
+          ? "Perdido"
+          : "Aberto";
+      if (valueActive) {
+        row["Valor da venda"] = stageById.get(lead.stageId)?.kind === "won"
+          ? lead.value
+          : "";
+      }
       row.CriadoEm = lead.createdAt;
       return row;
     }),
   );
 
-  const reportKpiCount = valueActive ? 6 : 4;
+  const reportKpiCount = valueActive ? 7 : 4;
 
   return (
     <div className="analytics-page">
@@ -381,7 +393,8 @@ export function AnalyticsPage({ onOpenLeads }: AnalyticsPageProps) {
       <section className={`report-kpi-grid items-${reportKpiCount}`}>
         <KpiCard icon={BarChart3} label="Leads no período" value={number(reportLeads.length)} detail={comparisonText(reportLeads.length, previousLeads.length)} tone="blue" onClick={() => openReportLeads()} />
         {valueActive && <KpiCard icon={CircleDollarSign} label="Pipeline aberto" value={currency(pipelineValue)} detail={`${open.length} oportunidades · ${comparisonText(pipelineValue, previousPipelineValue)}`} tone="indigo" onClick={() => openReportLeads({ special: "open_lead", label: "Pipeline aberto" })} />}
-        <KpiCard icon={CheckCircle2} label="Negócios ganhos" value={number(won.length)} detail={valueActive ? `${currency(wonValue)} · ${comparisonText(won.length, previousWon.length)}` : comparisonText(won.length, previousWon.length)} tone="green" onClick={() => openReportLeads({ special: "won_lead", label: "Negócios ganhos" })} />
+        <KpiCard icon={CheckCircle2} label="Negócios ganhos" value={number(won.length)} detail={comparisonText(won.length, previousWon.length)} tone="green" onClick={() => openReportLeads({ special: "won_lead", label: "Negócios ganhos" })} />
+        {valueActive && <KpiCard icon={CircleDollarSign} label="Valor em vendas" value={currency(wonValue)} detail={`${won.length} vendas · ${comparisonText(wonValue, previousWonValue)}`} tone="green" onClick={() => openReportLeads({ special: "won_lead", label: "Valor em vendas" })} />}
         <KpiCard icon={Target} label="Conversão de fechamentos" value={`${closedConversion}%`} detail={`${won.length} de ${won.length + lost.length} encerrados · ${comparisonText(closedConversion, previousConversion)}`} tone="violet" />
         {valueActive && <KpiCard icon={TrendingUp} label="Ticket médio ganho" value={currency(averageWonTicket)} detail={comparisonText(averageWonTicket, previousTicket)} tone="amber" onClick={() => openReportLeads({ special: "won_lead", label: "Negócios ganhos" })} />}
         <KpiCard icon={Clock3} label="Tempo até o primeiro envio" value={minutesLabel(averageResponse)} detail={`${responseMinutes.length} leads com mensagem de saída mensurável`} tone="cyan" />
@@ -435,10 +448,10 @@ export function AnalyticsPage({ onOpenLeads }: AnalyticsPageProps) {
             <div className="panel-head"><div><h2>Desempenho por {fieldLabel("origin").toLowerCase()}</h2><p>{valueActive ? "Volume, pipeline e resultado por canal de aquisição." : "Volume e resultado por canal de aquisição."}</p></div></div>
             <div className="report-table-wrap">
               <table className="report-table">
-                <thead><tr><th>{fieldLabel("origin")}</th><th>Leads</th>{valueActive && <th>Pipeline</th>}<th>Ganhos</th><th>Conversão</th><th /></tr></thead>
+                <thead><tr><th>{fieldLabel("origin")}</th><th>Leads</th>{valueActive && <th>Pipeline</th>}<th>Ganhos</th>{valueActive && <th>Vendas</th>}<th>Conversão</th><th /></tr></thead>
                 <tbody>{sourceStats.map((item) => (
                   <tr key={item.name} role="button" tabIndex={0} onClick={() => openReportLeads({ origin: item.name, label: item.name })} onKeyDown={(event) => event.key === "Enter" && openReportLeads({ origin: item.name, label: item.name })}>
-                    <td><OriginBadge origin={item.name} /></td><td>{item.leads}</td>{valueActive && <td>{currency(item.pipeline)}</td>}<td>{item.won}</td>
+                    <td><OriginBadge origin={item.name} /></td><td>{item.leads}</td>{valueActive && <td>{currency(item.pipeline)}</td>}<td>{item.won}</td>{valueActive && <td>{currency(item.sold)}</td>}
                     <td><span className="conversion-cell"><span><i style={{ width: `${item.conversion}%` }} /></span><strong>{item.conversion}%</strong></span></td>
                     <td><ArrowRight size={15} /></td>
                   </tr>
@@ -455,10 +468,11 @@ export function AnalyticsPage({ onOpenLeads }: AnalyticsPageProps) {
             {ownerStats.map((item) => (
               <button type="button" className="team-performance-card" key={item.user.id} onClick={() => openReportLeads({ ownerId: item.user.id, label: item.user.name })}>
                 <div className="team-person"><Avatar user={item.user} /><span><strong>{item.user.name}</strong><small>{item.user.roleLabel}</small></span><ArrowRight size={15} /></div>
-                <dl className={valueActive ? "" : "three-columns"}>
+                <dl className={valueActive ? "five-columns" : "three-columns"}>
                   <div><dt>Ativos</dt><dd>{item.active}</dd></div>
                   {valueActive && <div><dt>Pipeline</dt><dd>{currency(item.pipeline)}</dd></div>}
                   <div><dt>Ganhos</dt><dd>{item.won}</dd></div>
+                  {valueActive && <div><dt>Vendas</dt><dd>{currency(item.sold)}</dd></div>}
                   <div><dt>Conversão</dt><dd>{item.conversion}%</dd></div>
                 </dl>
                 <div className="team-card-alerts">

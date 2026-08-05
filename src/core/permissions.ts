@@ -7,6 +7,7 @@ export type Permission =
   | "leads.write"
   | "leads.create"
   | "leads.assign"
+  | "leads.delete"
   | "pipeline.move"
   | "pipeline.manage"
   | "tasks.read"
@@ -27,6 +28,7 @@ const permissions: Record<RoleKey, Permission[]> = {
     "leads.write",
     "leads.create",
     "leads.assign",
+    "leads.delete",
     "pipeline.move",
     "pipeline.manage",
     "tasks.read",
@@ -46,6 +48,7 @@ const permissions: Record<RoleKey, Permission[]> = {
     "leads.write",
     "leads.create",
     "leads.assign",
+    "leads.delete",
     "pipeline.move",
     "tasks.read",
     "tasks.manage",
@@ -88,6 +91,7 @@ const databasePermissionMap: Partial<Record<Permission, string[]>> = {
   "leads.write": ["leads.update", "leads.update_all", "leads.update_assigned"],
   "leads.create": ["leads.create"],
   "leads.assign": ["leads.assign"],
+  "leads.delete": ["leads.delete"],
   "pipeline.move": ["leads.move", "leads.move_all", "leads.move_assigned"],
   "pipeline.manage": ["pipelines.manage"],
   "tasks.read": ["tasks.read_all", "tasks.read_own"],

@@ -8,6 +8,7 @@ import type {
   Lead,
   LeadFieldDefinition,
   LeadInput,
+  LeadMoveOptions,
   Organization,
   OrganizationTemplateMode,
   Pipeline,
@@ -32,7 +33,13 @@ export interface CrmGateway {
   snapshot(session: Session): Promise<AppSnapshot>;
 
   saveLead(session: Session, input: LeadInput): Promise<Lead>;
-  moveLead(session: Session, leadId: string, stageId: string): Promise<void>;
+  moveLead(
+    session: Session,
+    leadId: string,
+    stageId: string,
+    options?: LeadMoveOptions,
+  ): Promise<void>;
+  deleteLead(session: Session, leadId: string): Promise<void>;
   addLeadNote(session: Session, leadId: string, note: string): Promise<void>;
 
   saveTask(session: Session, input: TaskInput): Promise<Task>;

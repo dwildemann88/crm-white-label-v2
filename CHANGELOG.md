@@ -1,6 +1,38 @@
 # Changelog
 
+## 5.1.0 — Ciclo completo do lead e receita comercial
+
+### Leads e Kanban
+
+- lead pode ser movido por arraste ou pela seleção de etapa no painel lateral;
+- etapas de perdido abrem justificativa obrigatória antes da movimentação;
+- etapas de ganho solicitam e registram o valor final da venda;
+- justificativa da perda fica visível no painel do lead;
+- exclusão definitiva disponível para administradores e gerentes, com confirmação pelo nome do lead;
+- exclusão remove tarefas, histórico e conversas vinculadas, mas preserva o contato cadastrado.
+
+### Equipe e notificações
+
+- transferência de responsável cria notificação em tempo real para o novo responsável;
+- a notificação identifica o lead e, quando disponível, quem realizou a transferência;
+- transferências para o próprio usuário não geram notificação redundante.
+
+### Relatórios
+
+- adicionado KPI de valor em vendas;
+- desempenho por origem e por responsável passa a exibir valor vendido;
+- exportação CSV inclui resultado comercial e valor da venda.
+
+### Banco de dados
+
+- adicionada a migration `202608050003_lead_outcomes_delete_notifications.sql`;
+- nova RPC `move_crm_lead_with_outcome`;
+- nova RPC `delete_crm_lead`;
+- novo gatilho de notificação de atribuição de lead;
+- criada e distribuída a permissão `leads.delete`.
+
 ## 5.0.0 — Reconstrução profissional de produto e usabilidade
+
 
 ### Coerência visual
 

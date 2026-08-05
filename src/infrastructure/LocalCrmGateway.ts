@@ -11,6 +11,7 @@ import type {
   Lead,
   LeadFieldDefinition,
   LeadInput,
+  LeadMoveOptions,
   NotificationItem,
   Organization,
   OrganizationTemplateMode,
@@ -553,7 +554,12 @@ export class LocalCrmGateway implements CrmGateway {
     return clone(lead);
   }
 
-  async moveLead(session: Session, leadId: string, stageId: string) {
+  async moveLead(
+    session: Session,
+    leadId: string,
+    stageId: string,
+    options: LeadMoveOptions = {},
+  ) {
     const database = readDatabase();
     const actor = currentUser(database, session);
     if (!can(actor, "pipeline.move"))
@@ -584,15 +590,35 @@ export class LocalCrmGateway implements CrmGateway {
     const previousStage = lead.stageId;
     if (previousStage === stageId) return;
 
+    const requiresLossReason = stage.requiresLossReason ?? stage.kind === "lost";
+    const requiresValue = stage.requiresValue ?? stage.kind === "won";
+    const lossReason = options.lossReason?.trim() || "";
+    const saleValue = Number(options.saleValue);
+
+    if (requiresLossReason && lossReason.length < 3) {
+      throw new Error("Informe a justificativa da perda.");
+    }
+    if (requiresValue && (!Number.isFinite(saleValue) || saleValue <= 0)) {
+      throw new Error("Informe um valor de venda maior que zero.");
+    }
+
     lead.stageId = stageId;
     lead.updatedAt = nowIso();
+    lead.lostReason = stage.kind === "lost" ? lossReason : undefined;
+    if (stage.kind === "won") lead.value = saleValue;
+
     database.histories.unshift({
       id: uid("hist"),
       organizationId: session.organizationId,
       leadId,
       actorId: actor.id,
       type: "moved",
-      description: `Lead movimentado para ${stage.name}`,
+      description:
+        stage.kind === "lost"
+          ? `Lead marcado como perdido: ${lossReason}`
+          : stage.kind === "won"
+            ? `Venda registrada em ${stage.name}`
+            : `Lead movimentado para ${stage.name}`,
       fromStageId: previousStage,
       toStageId: stageId,
       createdAt: nowIso(),
@@ -600,9 +626,44 @@ export class LocalCrmGateway implements CrmGateway {
     notify(
       database,
       session.organizationId,
-      "Lead movimentado",
-      `${lead.name} avançou para ${stage.name}.`,
+      stage.kind === "won" ? "Venda registrada" : stage.kind === "lost" ? "Lead perdido" : "Lead movimentado",
+      `${lead.name} foi movimentado para ${stage.name}.`,
       lead.ownerId,
+    );
+    writeDatabase(database);
+  }
+
+  async deleteLead(session: Session, leadId: string) {
+    const database = readDatabase();
+    const actor = currentUser(database, session);
+    if (!can(actor, "leads.delete")) {
+      throw new Error("Sem permissão para excluir leads.");
+    }
+
+    const lead = database.leads.find(
+      (item) => item.id === leadId && item.organizationId === session.organizationId,
+    );
+    if (!lead) throw new Error("Lead não encontrado.");
+    if (!canAccessLead(actor, lead, initialStageIds(database, session.organizationId))) {
+      throw new Error("Este lead não está no seu escopo de acesso.");
+    }
+
+    database.leads = database.leads.filter((item) => item.id !== leadId);
+    database.histories = database.histories.filter((item) => item.leadId !== leadId);
+    database.tasks = database.tasks.filter((item) => item.leadId !== leadId);
+    const conversationIds = new Set(
+      database.conversations
+        .filter((item) => item.leadId === leadId)
+        .map((item) => item.id),
+    );
+    database.conversations = database.conversations.filter(
+      (item) => item.leadId !== leadId,
+    );
+    database.messages = database.messages.filter(
+      (item) => !conversationIds.has(item.conversationId),
+    );
+    database.notifications = database.notifications.filter(
+      (item) => !item.description.includes(lead.name),
     );
     writeDatabase(database);
   }

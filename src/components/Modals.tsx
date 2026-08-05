@@ -213,8 +213,10 @@ export function LeadModal({
       : {
           pipelineId: pipelines[0]?.id || "",
           stageId:
-            allStages.find((stage) => stage.pipelineId === pipelines[0]?.id)
-              ?.id || "",
+            allStages.find(
+              (stage) =>
+                stage.pipelineId === pipelines[0]?.id && stage.kind === "open",
+            )?.id || "",
           name: "",
           company: "",
           phone: "",
@@ -234,7 +236,9 @@ export function LeadModal({
   );
 
   const stages = allStages.filter(
-    (stage) => stage.pipelineId === form.pipelineId,
+    (stage) =>
+      stage.pipelineId === form.pipelineId &&
+      (lead ? true : stage.kind === "open"),
   );
 
   const customFields = useMemo(
@@ -342,10 +346,12 @@ export function LeadModal({
               <select
                 value={form.pipelineId}
                 required
+                disabled={Boolean(lead)}
                 onChange={(event) => {
                   const pipelineId = event.target.value;
                   const firstStage = allStages.find(
-                    (stage) => stage.pipelineId === pipelineId,
+                    (stage) =>
+                      stage.pipelineId === pipelineId && stage.kind === "open",
                   );
                   const eligible = eligibleLeadOwners(users, pipelineId);
                   setForm((old) => ({
@@ -370,6 +376,7 @@ export function LeadModal({
               <select
                 value={form.stageId}
                 required
+                disabled={Boolean(lead)}
                 onChange={(event) => change("stageId", event.target.value)}
               >
                 {stages.map((stage) => (
@@ -395,6 +402,11 @@ export function LeadModal({
               </select>
             </label>
           </div>
+          {lead && (
+            <p className="form-context-note">
+              A movimentação de etapa é feita no painel do lead ou arrastando o card no Kanban. Assim, perdas exigem justificativa e vendas exigem valor confirmado.
+            </p>
+          )}
         </div>
 
         {customFields.length > 0 && (
@@ -1031,6 +1043,181 @@ export function UserModal({
               : isLocalProvider
                 ? "Criar usuário"
                 : "Enviar convite"}
+          </button>
+        </div>
+      </form>
+    </ModalShell>
+  );
+}
+
+export function LeadMoveModal({
+  lead,
+  stage,
+  onClose,
+}: {
+  lead: Lead;
+  stage: import("../core/types").PipelineStage;
+  onClose(): void;
+}) {
+  const { moveLead, busy } = useCrm();
+  const requiresLossReason = stage.requiresLossReason ?? stage.kind === "lost";
+  const requiresValue = stage.requiresValue ?? stage.kind === "won";
+  const [lossReason, setLossReason] = useState(lead.lostReason || "");
+  const [saleValue, setSaleValue] = useState(
+    lead.value > 0 ? String(lead.value) : "",
+  );
+
+  const numericSaleValue = Number(saleValue.replace(",", "."));
+  const valid =
+    (!requiresLossReason || lossReason.trim().length >= 3) &&
+    (!requiresValue || (Number.isFinite(numericSaleValue) && numericSaleValue > 0));
+
+  const title =
+    stage.kind === "lost"
+      ? "Marcar lead como perdido"
+      : stage.kind === "won"
+        ? "Registrar venda"
+        : `Mover para ${stage.name}`;
+
+  const subtitle =
+    stage.kind === "lost"
+      ? "A justificativa será registrada no histórico comercial."
+      : stage.kind === "won"
+        ? "Confirme o valor efetivamente vendido antes de encerrar a oportunidade."
+        : "Confirme a nova etapa desta oportunidade.";
+
+  return (
+    <ModalShell title={title} subtitle={subtitle} onClose={onClose}>
+      <form
+        className="modal-form lead-outcome-form"
+        onSubmit={async (event) => {
+          event.preventDefault();
+          if (!valid) return;
+          await moveLead(lead.id, stage.id, {
+            lossReason: requiresLossReason ? lossReason.trim() : undefined,
+            saleValue: requiresValue ? numericSaleValue : undefined,
+          });
+          onClose();
+        }}
+      >
+        <div className={`lead-outcome-summary kind-${stage.kind}`}>
+          <span style={{ background: stage.color }} />
+          <div>
+            <small>Nova etapa</small>
+            <strong>{stage.name}</strong>
+            <p>{lead.name}</p>
+          </div>
+        </div>
+
+        {requiresLossReason && (
+          <label className="full-field">
+            Justificativa da perda *
+            <textarea
+              value={lossReason}
+              autoFocus
+              minLength={3}
+              maxLength={1000}
+              required
+              placeholder="Ex.: cliente adiou o projeto, não aprovou o investimento ou fechou com concorrente."
+              onChange={(event) => setLossReason(event.target.value)}
+            />
+            <small>{lossReason.trim().length}/1000 caracteres</small>
+          </label>
+        )}
+
+        {requiresValue && (
+          <label>
+            Valor da venda *
+            <input
+              type="number"
+              min="0.01"
+              step="0.01"
+              value={saleValue}
+              autoFocus={!requiresLossReason}
+              required
+              placeholder="0,00"
+              onChange={(event) => setSaleValue(event.target.value)}
+            />
+            <small>Use o valor final fechado, não apenas a estimativa inicial.</small>
+          </label>
+        )}
+
+        <div className="modal-footer">
+          <button type="button" className="secondary-button" onClick={onClose}>
+            Cancelar
+          </button>
+          <button
+            type="submit"
+            className={stage.kind === "lost" ? "danger-button" : "primary-button"}
+            disabled={!valid || busy}
+          >
+            {stage.kind === "lost" ? <Trash2 size={16} /> : <Check size={16} />}
+            {stage.kind === "lost"
+              ? "Confirmar perda"
+              : stage.kind === "won"
+                ? "Registrar venda"
+                : "Mover lead"}
+          </button>
+        </div>
+      </form>
+    </ModalShell>
+  );
+}
+
+export function LeadDeleteModal({
+  lead,
+  onClose,
+  onDeleted,
+}: {
+  lead: Lead;
+  onClose(): void;
+  onDeleted(): void;
+}) {
+  const { deleteLead, busy } = useCrm();
+  const [confirmation, setConfirmation] = useState("");
+  const expected = lead.name.trim();
+  const valid = confirmation.trim().toLocaleLowerCase("pt-BR") === expected.toLocaleLowerCase("pt-BR");
+
+  return (
+    <ModalShell
+      title="Excluir lead definitivamente"
+      subtitle="Esta ação remove a oportunidade, tarefas, histórico e conversas vinculadas."
+      onClose={onClose}
+    >
+      <form
+        className="modal-form lead-delete-form"
+        onSubmit={async (event) => {
+          event.preventDefault();
+          if (!valid) return;
+          await deleteLead(lead.id);
+          onDeleted();
+          onClose();
+        }}
+      >
+        <div className="destructive-warning">
+          <Trash2 size={20} />
+          <div>
+            <strong>A exclusão não pode ser desfeita.</strong>
+            <p>Para arquivar uma oportunidade sem apagar os dados, mova-a para uma etapa de perdido.</p>
+          </div>
+        </div>
+
+        <label>
+          Digite <strong>{expected}</strong> para confirmar
+          <input
+            value={confirmation}
+            autoFocus
+            autoComplete="off"
+            onChange={(event) => setConfirmation(event.target.value)}
+          />
+        </label>
+
+        <div className="modal-footer">
+          <button type="button" className="secondary-button" onClick={onClose}>
+            Cancelar
+          </button>
+          <button type="submit" className="danger-button" disabled={!valid || busy}>
+            <Trash2 size={16} /> Excluir definitivamente
           </button>
         </div>
       </form>

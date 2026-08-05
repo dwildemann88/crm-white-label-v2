@@ -9,6 +9,7 @@ import type {
   Lead,
   LeadFieldDefinition,
   LeadInput,
+  LeadMoveOptions,
   Organization,
   OrganizationTemplateMode,
   Pipeline,
@@ -98,13 +99,26 @@ export class RestCrmGateway implements CrmGateway {
     );
   }
 
-  moveLead(session: Session, leadId: string, stageId: string) {
+  moveLead(
+    session: Session,
+    leadId: string,
+    stageId: string,
+    options?: LeadMoveOptions,
+  ) {
     return this.request<void>(
       `/leads/${leadId}/stage`,
       {
         method: "PATCH",
-        body: JSON.stringify({ stageId }),
+        body: JSON.stringify({ stageId, ...(options || {}) }),
       },
+      session,
+    );
+  }
+
+  deleteLead(session: Session, leadId: string) {
+    return this.request<void>(
+      `/leads/${leadId}`,
+      { method: "DELETE" },
       session,
     );
   }

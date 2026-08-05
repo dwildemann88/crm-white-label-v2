@@ -14,6 +14,7 @@ import type {
   LeadHistory,
   LeadFieldDefinition,
   LeadInput,
+  LeadMoveOptions,
   LeadPriority,
   LeadTemperature,
   Message,
@@ -662,7 +663,7 @@ export class SupabaseCrmGateway implements CrmGateway {
       requireData<any[]>(
         supabase
           .from("pipeline_stages")
-          .select("id,organization_id,pipeline_id,name,color,position,category")
+          .select("id,organization_id,pipeline_id,name,color,position,category,requires_loss_reason,requires_value")
           .eq("organization_id", organizationId)
           .order("position"),
       ),
@@ -923,6 +924,8 @@ export class SupabaseCrmGateway implements CrmGateway {
       color: item.color,
       order: item.position,
       kind: item.category,
+      requiresLossReason: Boolean(item.requires_loss_reason),
+      requiresValue: Boolean(item.requires_value),
     }));
 
     const leadSources: LeadSourceDefinition[] = sourcesData.map((item) => ({
@@ -1015,8 +1018,8 @@ for (const item of leadTagsData) {
         notes:
   contact?.notes ||
   item.raw_payload?.notes ||
-  item.lost_reason ||
   "",
+        lostReason: item.lost_reason ?? undefined,
         customValues: customValuesByLead.get(item.id) ?? {},
         rawPayload: item.raw_payload ?? {},
       };
@@ -1682,18 +1685,19 @@ if (input.id) {
   session: Session,
   leadId: string,
   stageId: string,
+  options: LeadMoveOptions = {},
 ): Promise<void> {
   const { data, error } = await supabase.rpc(
-    "move_crm_lead",
+    "move_crm_lead_with_outcome",
     {
-      p_organization_id:
-        session.organizationId,
-
-      p_lead_id:
-        leadId,
-
-      p_stage_id:
-        stageId,
+      p_organization_id: session.organizationId,
+      p_lead_id: leadId,
+      p_stage_id: stageId,
+      p_loss_reason: options.lossReason?.trim() || null,
+      p_sale_value:
+        options.saleValue !== undefined
+          ? Number(options.saleValue)
+          : null,
     },
   );
 
@@ -1717,6 +1721,33 @@ if (input.id) {
     );
   }
 }
+
+  async deleteLead(
+    session: Session,
+    leadId: string,
+  ): Promise<void> {
+    const { data, error } = await supabase.rpc(
+      "delete_crm_lead",
+      {
+        p_organization_id: session.organizationId,
+        p_lead_id: leadId,
+      },
+    );
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    const result = data as {
+      lead_id?: string;
+      deleted?: boolean;
+    };
+
+    if (!result.deleted || result.lead_id !== leadId) {
+      throw new Error("O banco não confirmou a exclusão do lead.");
+    }
+  }
+
   async addLeadNote(
     session: Session,
     leadId: string,

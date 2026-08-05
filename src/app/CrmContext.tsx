@@ -18,6 +18,7 @@ import type {
   Lead,
   LeadFieldDefinition,
   LeadInput,
+  LeadMoveOptions,
   Message,
   NewWebhookIntegrationInput,
   Organization,
@@ -52,7 +53,12 @@ interface CrmContextValue {
   setToast(message: string): void;
   can(permission: Permission): boolean;
   saveLead(input: LeadInput): Promise<void>;
-  moveLead(leadId: string, stageId: string): Promise<void>;
+  moveLead(
+    leadId: string,
+    stageId: string,
+    options?: LeadMoveOptions,
+  ): Promise<void>;
+  deleteLead(leadId: string): Promise<void>;
   addLeadNote(leadId: string, note: string): Promise<void>;
   saveTask(input: TaskInput): Promise<void>;
   toggleTask(taskId: string): Promise<void>;
@@ -450,10 +456,17 @@ useEffect(() => {
       );
     },
 
-    moveLead(leadId, stageId) {
+    moveLead(leadId, stageId, options) {
       return execute(
-        () => gateway.moveLead(session!, leadId, stageId),
+        () => gateway.moveLead(session!, leadId, stageId, options),
         "Lead movimentado no funil.",
+      );
+    },
+
+    deleteLead(leadId) {
+      return execute(
+        () => gateway.deleteLead(session!, leadId),
+        "Lead excluído.",
       );
     },
 

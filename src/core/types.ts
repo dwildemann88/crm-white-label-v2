@@ -142,6 +142,8 @@ export interface PipelineStage {
   color: string;
   order: number;
   kind: "open" | "won" | "lost";
+  requiresLossReason?: boolean;
+  requiresValue?: boolean;
 }
 
 export interface Lead {
@@ -166,6 +168,7 @@ export interface Lead {
   updatedAt: string;
   lastContact: string;
   notes: string;
+  lostReason?: string;
   customValues?: Record<string, CustomFieldValue>;
   rawPayload?: Record<string, unknown>;
 }
@@ -414,6 +417,12 @@ export interface LeadFilters {
   ownerId?: string;
   priority?: string;
   tag?: string;
+}
+
+
+export interface LeadMoveOptions {
+  lossReason?: string;
+  saleValue?: number;
 }
 
 export type LeadInput = Omit<

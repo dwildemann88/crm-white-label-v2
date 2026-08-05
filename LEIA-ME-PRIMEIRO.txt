@@ -1,4 +1,4 @@
-CRM COMERCIAL V5 — LEIA ANTES DE EXECUTAR
+CRM COMERCIAL V5.1 — LEIA ANTES DE EXECUTAR
 
 1. Extraia esta versão em uma pasta nova. Não copie arquivos por cima de versões anteriores.
 2. Copie seu .env.local funcional para a raiz. Ele não acompanha o ZIP.
@@ -13,4 +13,5 @@ CRM COMERCIAL V5 — LEIA ANTES DE EXECUTAR
 7. O sistema visual é fixo. Cada organização altera somente nome e logo.
 8. Indicadores e etapas agora devem abrir o recorte exato correspondente; trate qualquer navegação genérica como regressão.
 9. Responsável comercial precisa ter acesso ao funil. O atendimento do WhatsApp possui responsável próprio e também respeita o funil.
-10. Nenhuma migration ou Edge Function nova é aplicada automaticamente por este pacote.
+10. Aplique a migration supabase/migrations/202608050003_lead_outcomes_delete_notifications.sql antes de publicar o frontend.
+11. Nenhuma migration ou Edge Function é aplicada automaticamente por este pacote.

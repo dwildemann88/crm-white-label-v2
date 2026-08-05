@@ -8,7 +8,13 @@ import {
 import { useMemo, useState } from "react";
 import { AppShell, type PageId } from "../components/AppShell";
 import { LeadDrawer } from "../components/LeadDrawer";
-import { LeadModal, TaskModal, UserModal } from "../components/Modals";
+import {
+  LeadDeleteModal,
+  LeadModal,
+  LeadMoveModal,
+  TaskModal,
+  UserModal,
+} from "../components/Modals";
 import { useCrm } from "./CrmContext";
 import { DashboardPage } from "../pages/DashboardPage";
 import { KanbanPage } from "../pages/KanbanPage";
@@ -23,11 +29,12 @@ import { LoginPage } from "../pages/LoginPage";
 import { SetPasswordPage } from "../pages/SetPasswordPage";
 import type { LeadListPreset } from "../core/leadFilters";
 
-interface ModalState {
-  type: "lead" | "task" | "user";
-  id?: string;
-  date?: string;
-}
+type ModalState =
+  | { type: "lead"; id?: string }
+  | { type: "task"; id?: string; date?: string }
+  | { type: "user"; id?: string }
+  | { type: "moveLead"; leadId: string; stageId: string }
+  | { type: "deleteLead"; leadId: string };
 
 export function App() {
   const {
@@ -40,6 +47,7 @@ export function App() {
     toast,
     visibleLeads,
     can,
+    moveLead,
     openWhatsAppConversation,
   } = useCrm();
 
@@ -70,6 +78,24 @@ const isInviteSetup =
     }
   };
 
+
+
+  const requestLeadMove = (leadId: string, stageId: string) => {
+    const lead = visibleLeads.find((item) => item.id === leadId);
+    const stage = data?.stages.find((item) => item.id === stageId);
+    if (!lead || !stage || lead.stageId === stageId) return;
+
+    const requiresDetails =
+      (stage.requiresLossReason ?? stage.kind === "lost") ||
+      (stage.requiresValue ?? stage.kind === "won");
+
+    if (requiresDetails) {
+      setModal({ type: "moveLead", leadId, stageId });
+      return;
+    }
+
+    void moveLead(leadId, stageId);
+  };
 
   const openLeadList = (preset?: Omit<LeadListPreset, "id">) => {
     setLeadPreset({ id: Date.now(), ...(preset || {}) });
@@ -114,6 +140,7 @@ if (isInviteSetup) {
         return (
           <KanbanPage
             onLead={setSelectedLeadId}
+            onMoveLead={requestLeadMove}
             onAdd={() => setModal({ type: "lead" })}
             initialPipelineId={kanbanPipelineId}
             onEditStages={(pipelineId) => {
@@ -225,6 +252,10 @@ if (isInviteSetup) {
           onWhatsApp={() => {
             void openLeadWhatsApp(selectedLead.id);
           }}
+          onMove={(stageId) => requestLeadMove(selectedLead.id, stageId)}
+          onDelete={() =>
+            setModal({ type: "deleteLead", leadId: selectedLead.id })
+          }
         />
       )}
 
@@ -236,6 +267,29 @@ if (isInviteSetup) {
           onClose={() => setModal(null)}
         />
       )}
+
+      {modal?.type === "moveLead" && (() => {
+        const lead = visibleLeads.find((item) => item.id === modal.leadId);
+        const stage = data.stages.find((item) => item.id === modal.stageId);
+        return lead && stage ? (
+          <LeadMoveModal
+            lead={lead}
+            stage={stage}
+            onClose={() => setModal(null)}
+          />
+        ) : null;
+      })()}
+
+      {modal?.type === "deleteLead" && (() => {
+        const lead = visibleLeads.find((item) => item.id === modal.leadId);
+        return lead ? (
+          <LeadDeleteModal
+            lead={lead}
+            onClose={() => setModal(null)}
+            onDeleted={() => setSelectedLeadId(null)}
+          />
+        ) : null;
+      })()}
 
       {modal?.type === "task" && (
         <TaskModal

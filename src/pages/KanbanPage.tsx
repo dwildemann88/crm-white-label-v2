@@ -82,13 +82,14 @@ function LeadCard({ lead, leadFields, onOpen, onDrag, onDragEnd, draggable }: {
   );
 }
 
-export function KanbanPage({ onLead, onAdd, onEditStages, initialPipelineId }: {
+export function KanbanPage({ onLead, onMoveLead, onAdd, onEditStages, initialPipelineId }: {
   onLead(id: string): void;
+  onMoveLead(leadId: string, stageId: string): void;
   onAdd(): void;
   onEditStages(pipelineId: string): void;
   initialPipelineId?: string;
 }) {
-  const { data, visibleLeads, moveLead, can } = useCrm();
+  const { data, visibleLeads, can } = useCrm();
   const organizationId = data?.session?.organizationId || "sem-organizacao";
   const leadFields = useMemo(
     () => resolveLeadFields(data?.leadFields || [], organizationId),
@@ -205,8 +206,8 @@ export function KanbanPage({ onLead, onAdd, onEditStages, initialPipelineId }: {
                 key={stage.id}
                 onDragOver={(event) => { event.preventDefault(); setDropTarget(stage.id); }}
                 onDragLeave={() => setDropTarget((current) => current === stage.id ? null : current)}
-                onDrop={async () => {
-                  if (dragging && can("pipeline.move")) await moveLead(dragging, stage.id);
+                onDrop={() => {
+                  if (dragging && can("pipeline.move")) onMoveLead(dragging, stage.id);
                   setDragging(null); setDropTarget(null);
                 }}
               >
