@@ -1,8 +1,12 @@
 import {
   Activity,
+  Braces,
   AlertTriangle,
   CheckCircle2,
   Copy,
+  ExternalLink,
+  FlaskConical,
+  History,
   KeyRound,
   MessageCircle,
   Plus,
@@ -10,11 +14,12 @@ import {
   Route,
   Settings2,
   ShieldCheck,
+  RefreshCw,
   Trash2,
   Webhook,
   X,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useCrm } from "../app/CrmContext";
 import { ModalShell } from "../components/Common";
 import { eligibleLeadOwners } from "../core/crmConsistency";
@@ -24,6 +29,8 @@ import type {
   IntegrationFieldMap,
   IntegrationSecretResult,
   NewWebhookIntegrationInput,
+  WebhookEvent,
+  WebhookTestResult,
 } from "../core/types";
 import { formatDateTime } from "../core/utils";
 
@@ -136,6 +143,120 @@ function integrationToDraft(
   };
 }
 
+function setPayloadValue(
+  payload: Record<string, unknown>,
+  path: string,
+  value: unknown,
+) {
+  const segments = path.split(".").filter(Boolean);
+  if (segments.length <= 1) {
+    payload[path] = value;
+    return;
+  }
+
+  let current = payload;
+  segments.forEach((segment, index) => {
+    if (index === segments.length - 1) {
+      current[segment] = value;
+      return;
+    }
+
+    const next = current[segment];
+    if (!next || typeof next !== "object" || Array.isArray(next)) {
+      current[segment] = {};
+    }
+    current = current[segment] as Record<string, unknown>;
+  });
+}
+
+function sampleValueForTarget(
+  target: string,
+  data: ReturnType<typeof useCrm>["data"],
+  sequence: string,
+): unknown {
+  const structural: Record<string, unknown> = {
+    name: "Lead de teste do webhook",
+    company: "Empresa de teste",
+    phone: `55559${sequence.slice(-8).padStart(8, "0")}`,
+    email: `webhook.teste.${sequence}@example.com`,
+    city: "Cidade de teste",
+    state: "RS",
+    campaign: "Teste interno do CRM",
+    priority: "Média",
+    temperature: "Morno",
+    score: 50,
+    value: 2500,
+    notes: "Lead criado pelo teste administrativo da integração.",
+    external_id: `crm-test-${sequence}`,
+    utm_source: "crm",
+    utm_medium: "webhook-test",
+    utm_content: "integration-screen",
+    utm_term: "teste",
+    gclid: `test-gclid-${sequence}`,
+    fbclid: `test-fbclid-${sequence}`,
+  };
+
+  if (Object.prototype.hasOwnProperty.call(structural, target)) {
+    return structural[target];
+  }
+
+  const field = data?.customFields.find((item) => item.key === target);
+  if (!field) return "Valor de teste";
+
+  switch (field.type) {
+    case "number":
+    case "currency":
+      return 2500;
+    case "boolean":
+      return true;
+    case "date": {
+      const date = new Date();
+      date.setDate(date.getDate() + 7);
+      return date.toISOString().slice(0, 10);
+    }
+    case "datetime":
+      return new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    case "select":
+      return field.options[0] || "Opção de teste";
+    case "email":
+      return `campo.${sequence}@example.com`;
+    case "phone":
+      return `55559${sequence.slice(-8).padStart(8, "0")}`;
+    case "url":
+      return "https://example.com/teste";
+    case "textarea":
+      return "Texto longo de teste enviado pela integração.";
+    default:
+      return "Valor de teste";
+  }
+}
+
+function createTestPayload(
+  integration: IntegrationConnection,
+  data: ReturnType<typeof useCrm>["data"],
+): Record<string, unknown> {
+  const sequence = String(Date.now());
+  const payload: Record<string, unknown> = {};
+
+  integration.fieldMappings.forEach((mapping) => {
+    setPayloadValue(
+      payload,
+      mapping.source,
+      sampleValueForTarget(mapping.target, data, sequence),
+    );
+  });
+
+  return payload;
+}
+
+const outcomeLabels: Record<WebhookEvent["outcome"], string> = {
+  received: "Recebido",
+  created: "Criado",
+  duplicate: "Duplicado",
+  rejected: "Rejeitado",
+  failed: "Falhou",
+};
+
 function SecretModal({
   credentials,
   onClose,
@@ -198,6 +319,171 @@ function SecretModal({
             <CheckCircle2 size={16} /> Já guardei a credencial
           </button>
         </div>
+      </div>
+    </ModalShell>
+  );
+}
+
+function WebhookTestModal({
+  integration,
+  onClose,
+  onComplete,
+  onLead,
+}: {
+  integration: IntegrationConnection;
+  onClose: () => void;
+  onComplete: () => Promise<void>;
+  onLead?: (leadId: string) => void;
+}) {
+  const { data, testIntegration } = useCrm();
+  const [payloadText, setPayloadText] = useState(() =>
+    JSON.stringify(createTestPayload(integration, data), null, 2),
+  );
+  const [submitting, setSubmitting] = useState(false);
+  const [localError, setLocalError] = useState("");
+  const [result, setResult] = useState<WebhookTestResult | null>(null);
+
+  const submit = async () => {
+    if (submitting) return;
+    setLocalError("");
+
+    let payload: Record<string, unknown>;
+    try {
+      const parsed = JSON.parse(payloadText) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("O JSON precisa ser um objeto.");
+      }
+      payload = parsed as Record<string, unknown>;
+    } catch (error) {
+      setLocalError(
+        error instanceof Error ? error.message : "Informe um JSON válido.",
+      );
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const nextResult = await testIntegration(integration.id, payload);
+      setResult(nextResult);
+      await onComplete();
+    } catch (error) {
+      setLocalError(
+        error instanceof Error
+          ? error.message
+          : "Não foi possível processar o lead de teste.",
+      );
+      await onComplete();
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <ModalShell
+      title={`Testar ${integration.name}`}
+      subtitle="O teste usa o mesmo mapeamento e cria um lead real na organização atual. A chave secreta não é exposta ao navegador."
+      onClose={onClose}
+      wide
+    >
+      <div className="webhook-test-layout">
+        <section className="webhook-test-editor">
+          <div className="webhook-test-heading">
+            <span><Braces size={18} /></span>
+            <div>
+              <h3>JSON de teste</h3>
+              <p>O exemplo foi montado conforme os campos mapeados nesta integração.</p>
+            </div>
+          </div>
+          <textarea
+            className="webhook-json-editor"
+            value={payloadText}
+            spellCheck={false}
+            onChange={(event) => {
+              setPayloadText(event.target.value);
+              setResult(null);
+              setLocalError("");
+            }}
+          />
+        </section>
+
+        <aside className="webhook-test-summary">
+          <h3>Destino do teste</h3>
+          <dl>
+            <div>
+              <dt>Integração</dt>
+              <dd>{integration.name}</dd>
+            </div>
+            <div>
+              <dt>Mapeamentos</dt>
+              <dd>{integration.fieldMappings.length}</dd>
+            </div>
+            <div>
+              <dt>Regra de duplicidade</dt>
+              <dd>
+                {duplicateRuleOptions.find(
+                  (item) => item.value === integration.duplicateRule,
+                )?.label || integration.duplicateRule}
+              </dd>
+            </div>
+          </dl>
+
+          <div className="integration-message warning">
+            <AlertTriangle size={16} />
+            <span>
+              Cada execução pode criar um lead real. O e-mail, telefone e ID externo
+              do exemplo são renovados quando esta janela é aberta.
+            </span>
+          </div>
+
+          {localError && (
+            <div className="integration-message error">
+              <AlertTriangle size={16} />
+              <span>{localError}</span>
+            </div>
+          )}
+
+          {result && (
+            <div
+              className={`webhook-test-result ${
+                result.created ? "is-created" : "is-duplicate"
+              }`}
+            >
+              {result.created ? <CheckCircle2 size={20} /> : <Copy size={20} />}
+              <div>
+                <strong>
+                  {result.created ? "Lead criado" : "Lead identificado como duplicado"}
+                </strong>
+                <small>Requisição: {result.requestId}</small>
+              </div>
+              {result.leadId && onLead && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onLead(result.leadId!);
+                    onClose();
+                  }}
+                >
+                  Abrir lead <ExternalLink size={14} />
+                </button>
+              )}
+            </div>
+          )}
+        </aside>
+      </div>
+
+      <div className="modal-footer webhook-test-footer">
+        <button type="button" className="secondary-button" onClick={onClose}>
+          Fechar
+        </button>
+        <button
+          type="button"
+          className="primary-button"
+          disabled={submitting || !integration.active}
+          onClick={() => void submit()}
+        >
+          <FlaskConical size={16} />
+          {submitting ? "Processando..." : "Enviar lead de teste"}
+        </button>
       </div>
     </ModalShell>
   );
@@ -726,16 +1012,60 @@ function IntegrationModal({
   );
 }
 
-export function IntegrationsPage() {
-  const { data, can } = useCrm();
+export function IntegrationsPage({
+  onLead,
+}: {
+  onLead?: (leadId: string) => void;
+}) {
+  const { data, can, listWebhookEvents } = useCrm();
   const [selected, setSelected] = useState<IntegrationConnection | null>(null);
+  const [testing, setTesting] = useState<IntegrationConnection | null>(null);
   const [creating, setCreating] = useState(false);
   const [credentials, setCredentials] =
     useState<IntegrationSecretResult | null>(null);
+  const [events, setEvents] = useState<WebhookEvent[]>([]);
+  const [eventsLoading, setEventsLoading] = useState(false);
+  const [eventsError, setEventsError] = useState("");
+  const [integrationFilter, setIntegrationFilter] = useState("");
+  const [outcomeFilter, setOutcomeFilter] = useState("");
 
   const integrations = (data?.integrations || []).filter(
     (item) => item.provider === "webhook",
   );
+  const organizationId = data?.session?.organizationId || "";
+
+  const loadEvents = async (silent = false) => {
+    if (!organizationId) return;
+    if (!silent) setEventsLoading(true);
+    setEventsError("");
+
+    try {
+      const result = await listWebhookEvents(undefined, 100);
+      setEvents(result);
+    } catch (error) {
+      setEventsError(
+        error instanceof Error
+          ? error.message
+          : "Não foi possível carregar o histórico.",
+      );
+    } finally {
+      if (!silent) setEventsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!organizationId) return;
+    void loadEvents();
+
+    const timer = window.setInterval(() => {
+      void loadEvents(true);
+    }, 20_000);
+
+    return () => window.clearInterval(timer);
+    // A troca de organização deve reiniciar o histórico; a função do contexto
+    // é intencionalmente omitida para evitar recargas em cada renderização.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [organizationId]);
 
   const summary = useMemo(
     () => ({
@@ -745,8 +1075,21 @@ export function IntegrationsPage() {
         (sum, item) => sum + item.eventsReceived,
         0,
       ),
+      failures: events.filter((item) =>
+        ["failed", "rejected"].includes(item.outcome),
+      ).length,
     }),
-    [integrations],
+    [events, integrations],
+  );
+
+  const filteredEvents = useMemo(
+    () =>
+      events.filter(
+        (event) =>
+          (!integrationFilter || event.integrationId === integrationFilter) &&
+          (!outcomeFilter || event.outcome === outcomeFilter),
+      ),
+    [events, integrationFilter, outcomeFilter],
   );
 
   const canManage = can("integrations.manage");
@@ -781,7 +1124,7 @@ export function IntegrationsPage() {
           <div>
             <small>Com atenção</small>
             <strong>{summary.attention}</strong>
-            <p>Sem eventos ou com erro recente</p>
+            <p>{summary.failures} falhas no histórico recente</p>
           </div>
         </article>
       </section>
@@ -808,8 +1151,8 @@ export function IntegrationsPage() {
       <div className="integration-message success webhook-stage-notice">
         <ShieldCheck size={17} />
         <span>
-          O receptor está ativo. Use o endpoint somente por uma automação ou
-          servidor seguro; não exponha a chave secreta no código público do site.
+          O receptor está ativo. Testes administrativos e eventos externos são
+          registrados no histórico desta organização.
         </span>
       </div>
 
@@ -830,7 +1173,7 @@ export function IntegrationsPage() {
           <div className="integration-card-content">
             <p>
               As funções de WhatsApp não são alteradas por este módulo. O novo
-              webhook será usado somente para entrada genérica de leads.
+              webhook é usado somente para entrada genérica de leads.
             </p>
             <div className="secure-note">
               <ShieldCheck size={16} />
@@ -921,8 +1264,17 @@ export function IntegrationsPage() {
                 )}
               </div>
 
-              <footer>
+              <footer className="integration-card-actions">
                 <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={!canManage || !integration.active}
+                  onClick={() => setTesting(integration)}
+                >
+                  <FlaskConical size={16} /> Testar
+                </button>
+                <button
+                  type="button"
                   className="primary-button"
                   disabled={!canManage}
                   onClick={() => setSelected(integration)}
@@ -958,6 +1310,111 @@ export function IntegrationsPage() {
         )}
       </div>
 
+      <section className="panel webhook-history-panel">
+        <div className="webhook-history-head">
+          <div>
+            <span className="section-kicker">Auditoria técnica</span>
+            <h2>Histórico de eventos</h2>
+            <p>
+              Acompanhe criações, duplicidades e falhas sem consultar o SQL Editor.
+            </p>
+          </div>
+          <button
+            type="button"
+            className="secondary-button"
+            disabled={eventsLoading}
+            onClick={() => void loadEvents()}
+          >
+            <RefreshCw size={16} className={eventsLoading ? "spin" : ""} />
+            Atualizar
+          </button>
+        </div>
+
+        <div className="webhook-history-filters">
+          <label>
+            Integração
+            <select
+              value={integrationFilter}
+              onChange={(event) => setIntegrationFilter(event.target.value)}
+            >
+              <option value="">Todas</option>
+              {integrations.map((integration) => (
+                <option key={integration.id} value={integration.id}>
+                  {integration.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Resultado
+            <select
+              value={outcomeFilter}
+              onChange={(event) => setOutcomeFilter(event.target.value)}
+            >
+              <option value="">Todos</option>
+              <option value="created">Criado</option>
+              <option value="duplicate">Duplicado</option>
+              <option value="failed">Falhou</option>
+              <option value="rejected">Rejeitado</option>
+              <option value="received">Recebido</option>
+            </select>
+          </label>
+          <div className="webhook-history-counts">
+            <span><CheckCircle2 size={14} /> {events.filter((event) => event.outcome === "created").length} criados</span>
+            <span><Copy size={14} /> {events.filter((event) => event.outcome === "duplicate").length} duplicados</span>
+            <span><AlertTriangle size={14} /> {summary.failures} falhas</span>
+          </div>
+        </div>
+
+        {eventsError && (
+          <div className="integration-message error">
+            <AlertTriangle size={16} />
+            <span>{eventsError}</span>
+          </div>
+        )}
+
+        <div className="webhook-event-list">
+          {filteredEvents.map((event) => (
+            <article className={`webhook-event-item outcome-${event.outcome}`} key={event.id}>
+              <div className="webhook-event-status">
+                <span>{outcomeLabels[event.outcome]}</span>
+                <small>{formatDateTime(event.receivedAt)}</small>
+              </div>
+              <div className="webhook-event-main">
+                <strong>{event.integrationName}</strong>
+                <code>{event.requestId}</code>
+                {event.errorMessage && <p>{event.errorMessage}</p>}
+                <details>
+                  <summary>Ver payload recebido</summary>
+                  <pre>{JSON.stringify(event.payload, null, 2)}</pre>
+                </details>
+              </div>
+              <div className="webhook-event-actions">
+                {event.leadId && onLead ? (
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => onLead(event.leadId!)}
+                  >
+                    Abrir lead <ExternalLink size={14} />
+                  </button>
+                ) : (
+                  <span>Sem lead vinculado</span>
+                )}
+              </div>
+            </article>
+          ))}
+
+          {!eventsLoading && filteredEvents.length === 0 && (
+            <div className="webhook-history-empty">
+              <History size={22} />
+              <strong>Nenhum evento encontrado</strong>
+              <p>Envie um lead externo ou use o botão Testar em uma integração ativa.</p>
+            </div>
+          )}
+        </div>
+      </section>
+
       <section className="panel technical-webhook-doc">
         <div className="webhook-doc-header">
           <span>
@@ -987,6 +1444,15 @@ Content-Type: application/json
             setSelected(null);
           }}
           onCredentials={setCredentials}
+        />
+      )}
+
+      {testing && (
+        <WebhookTestModal
+          integration={testing}
+          onClose={() => setTesting(null)}
+          onComplete={() => loadEvents()}
+          onLead={onLead}
         />
       )}
 

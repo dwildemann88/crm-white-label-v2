@@ -33,6 +33,9 @@ import type {
   WhatsAppMediaPrepareInput,
   WhatsAppPreparedMediaMessage,
   WhatsAppTemplateSendInput,
+  WebhookEvent,
+  WebhookEventOutcome,
+  WebhookTestResult,
 } from "../core/types";
 import { supabase } from "./supabase/client";
 import { getCrmBootstrap, type BootstrapMembership } from "./supabase/bootstrap";
@@ -1361,7 +1364,7 @@ for (const reminder of remindersData) {
               )
           : [],
         lastEventAt: item.last_event_at ?? null,
-        lastTestAt: null,
+        lastTestAt: item.last_test_at ?? null,
         eventsReceived: Number(item.events_received ?? 0),
         errors: Array.isArray(item.errors)
           ? item.errors.filter((error: unknown): error is string =>
@@ -3226,15 +3229,95 @@ if (input.id) {
     }
   }
 
-  testIntegration(
-    _session: Session,
-    _integrationId: string,
-  ): Promise<void> {
-    return Promise.reject(
-      new Error(
-        "O teste ficará disponível após a publicação do receptor de webhooks.",
-      ),
+  async listWebhookEvents(
+    session: Session,
+    integrationId?: string,
+    limit = 50,
+  ): Promise<WebhookEvent[]> {
+    const { data, error } = await supabase.rpc(
+      "list_crm_webhook_events",
+      {
+        p_organization_id: session.organizationId,
+        p_integration_id: integrationId ?? null,
+        p_limit: Math.min(Math.max(Math.trunc(limit), 1), 200),
+      },
     );
+
+    if (error) throw new Error(error.message);
+
+    const rows = Array.isArray(data) ? data : [];
+
+    return rows.map((raw: unknown) => {
+      const item =
+        raw && typeof raw === "object" && !Array.isArray(raw)
+          ? (raw as Record<string, unknown>)
+          : {};
+      const payload =
+        item.payload &&
+        typeof item.payload === "object" &&
+        !Array.isArray(item.payload)
+          ? (item.payload as Record<string, unknown>)
+          : {};
+
+      return {
+        id: String(item.id ?? ""),
+        organizationId: String(item.organization_id ?? session.organizationId),
+        integrationId: String(item.integration_id ?? ""),
+        integrationName: String(item.integration_name ?? "Webhook"),
+        requestId: String(item.request_id ?? ""),
+        outcome: String(item.outcome ?? "failed") as WebhookEventOutcome,
+        externalId:
+          typeof item.external_id === "string" ? item.external_id : null,
+        leadId: typeof item.lead_id === "string" ? item.lead_id : null,
+        errorMessage:
+          typeof item.error_message === "string" ? item.error_message : null,
+        payload,
+        receivedAt: String(item.received_at ?? new Date().toISOString()),
+      };
+    });
+  }
+
+  async testIntegration(
+    session: Session,
+    integrationId: string,
+    payload: Record<string, unknown>,
+  ): Promise<WebhookTestResult> {
+    const { data, error } = await supabase.rpc(
+      "test_crm_webhook_integration",
+      {
+        p_organization_id: session.organizationId,
+        p_integration_id: integrationId,
+        p_payload: payload,
+      },
+    );
+
+    if (error) throw new Error(error.message);
+
+    const result =
+      data && typeof data === "object" && !Array.isArray(data)
+        ? (data as Record<string, unknown>)
+        : {};
+    const created = result.created === true;
+    const duplicate = result.duplicate === true;
+    const requestId =
+      typeof result.request_id === "string" ? result.request_id : "";
+
+    if (!requestId || (!created && !duplicate)) {
+      throw new Error("O banco não confirmou o processamento do teste.");
+    }
+
+    return {
+      created,
+      duplicate,
+      idempotent: result.idempotent === true,
+      duplicateBy:
+        typeof result.duplicate_by === "string" ? result.duplicate_by : null,
+      leadId: typeof result.lead_id === "string" ? result.lead_id : null,
+      contactId:
+        typeof result.contact_id === "string" ? result.contact_id : null,
+      requestId,
+      outcome: created ? "created" : "duplicate",
+    };
   }
   resetDemo(): Promise<void> {
     return Promise.resolve();

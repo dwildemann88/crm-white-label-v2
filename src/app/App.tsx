@@ -157,7 +157,7 @@ if (isInviteSetup) {
 
       case "integrations":
         return can("integrations.manage") ? (
-          <IntegrationsPage />
+          <IntegrationsPage onLead={setSelectedLeadId} />
         ) : (
           <DashboardPage
             onNavigate={(value) => setPage(value as PageId)}

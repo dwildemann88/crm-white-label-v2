@@ -31,6 +31,8 @@ import type {
   UserInput,
   WhatsAppMediaPrepareInput,
   WhatsAppTemplateSendInput,
+  WebhookEvent,
+  WebhookTestResult,
 } from "../core/types";
 import { createGateway } from "../infrastructure/createGateway";
 import { supabase } from "../infrastructure/supabase/client";
@@ -97,7 +99,14 @@ savePipeline(pipeline: Pipeline): Promise<void>;
     integrationId: string,
   ): Promise<IntegrationSecretResult>;
   deleteIntegration(integrationId: string): Promise<void>;
-  testIntegration(integrationId: string): Promise<void>;
+  listWebhookEvents(
+    integrationId?: string,
+    limit?: number,
+  ): Promise<WebhookEvent[]>;
+  testIntegration(
+    integrationId: string,
+    payload: Record<string, unknown>,
+  ): Promise<WebhookTestResult>;
   resetDemo(): Promise<void>;
 }
 
@@ -1014,10 +1023,18 @@ removeUser(userId) {
       );
     },
 
-    testIntegration(integrationId) {
-      return execute(
-        () => gateway.testIntegration(session!, integrationId),
-        "Teste concluído com sucesso.",
+    listWebhookEvents(integrationId, limit) {
+      if (!session) {
+        return Promise.reject(new Error("Sessão não encontrada."));
+      }
+
+      return gateway.listWebhookEvents(session, integrationId, limit);
+    },
+
+    testIntegration(integrationId, payload) {
+      return executeResult(
+        () => gateway.testIntegration(session!, integrationId, payload),
+        "Lead de teste processado.",
       );
     },
 

@@ -22,6 +22,8 @@ import type {
   TaskInput,
   User,
   UserInput,
+  WebhookEvent,
+  WebhookTestResult,
 } from "../core/types";
 import { initials, normalizePhone, nowIso, sleep, uid } from "../core/utils";
 import { seedDatabase } from "../data/seed";
@@ -2125,10 +2127,53 @@ async openWhatsAppConversation(
     writeDatabase(database);
   }
 
-  async testIntegration(_session: Session, _integrationId: string) {
-    throw new Error(
-      "O teste ficará disponível após a publicação do receptor de webhooks.",
+  async listWebhookEvents(
+    _session: Session,
+    _integrationId?: string,
+    _limit = 50,
+  ): Promise<WebhookEvent[]> {
+    return [];
+  }
+
+  async testIntegration(
+    session: Session,
+    integrationId: string,
+    _payload: Record<string, unknown>,
+  ): Promise<WebhookTestResult> {
+    const database = readDatabase();
+    const actor = currentUser(database, session);
+
+    if (!can(actor, "integrations.manage")) {
+      throw new Error("Sem permissão para testar integrações.");
+    }
+
+    const integration = database.integrations.find(
+      (item) =>
+        item.id === integrationId &&
+        item.organizationId === session.organizationId,
     );
+
+    if (!integration) throw new Error("Integração não encontrada.");
+    if (!integration.active) throw new Error("Ative a integração antes do teste.");
+
+    const requestId = `crm-local-test-${Date.now()}`;
+    integration.lastEventAt = nowIso();
+    integration.lastTestAt = integration.lastEventAt;
+    integration.eventsReceived += 1;
+    integration.status = "connected";
+    integration.errors = [];
+    writeDatabase(database);
+
+    return {
+      created: true,
+      duplicate: false,
+      idempotent: false,
+      duplicateBy: null,
+      leadId: null,
+      contactId: null,
+      requestId,
+      outcome: "created",
+    };
   }
 
   async resetDemo() {

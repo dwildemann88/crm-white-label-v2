@@ -14,6 +14,12 @@ export type IntegrationDuplicateRule =
   | "phone_or_email"
   | "always_create";
 export type OrganizationTemplateMode = "generic" | "copy";
+export type WebhookEventOutcome =
+  | "received"
+  | "created"
+  | "duplicate"
+  | "rejected"
+  | "failed";
 export type MessageDirection = "inbound" | "outbound" | "internal";
 export type MessageType =
   | "text"
@@ -318,6 +324,31 @@ export interface IntegrationSecretResult {
   integrationId: string;
   publicKey: string;
   secret: string;
+}
+
+export interface WebhookEvent {
+  id: string;
+  organizationId: string;
+  integrationId: string;
+  integrationName: string;
+  requestId: string;
+  outcome: WebhookEventOutcome;
+  externalId: string | null;
+  leadId: string | null;
+  errorMessage: string | null;
+  payload: Record<string, unknown>;
+  receivedAt: string;
+}
+
+export interface WebhookTestResult {
+  created: boolean;
+  duplicate: boolean;
+  idempotent: boolean;
+  duplicateBy: string | null;
+  leadId: string | null;
+  contactId: string | null;
+  requestId: string;
+  outcome: "created" | "duplicate";
 }
 
 export interface IntegrationConnection {

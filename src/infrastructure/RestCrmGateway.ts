@@ -19,6 +19,8 @@ import type {
   TaskInput,
   User,
   UserInput,
+  WebhookEvent,
+  WebhookTestResult,
 } from "../core/types";
 
 /**
@@ -418,10 +420,32 @@ openWhatsAppConversation(
     );
   }
 
-  testIntegration(session: Session, integrationId: string) {
-    return this.request<void>(
+  listWebhookEvents(
+    session: Session,
+    integrationId?: string,
+    limit = 50,
+  ) {
+    const query = new URLSearchParams({ limit: String(limit) });
+    if (integrationId) query.set("integrationId", integrationId);
+
+    return this.request<WebhookEvent[]>(
+      `/integrations/webhook-events?${query.toString()}`,
+      {},
+      session,
+    );
+  }
+
+  testIntegration(
+    session: Session,
+    integrationId: string,
+    payload: Record<string, unknown>,
+  ) {
+    return this.request<WebhookTestResult>(
       `/integrations/${integrationId}/test`,
-      { method: "POST" },
+      {
+        method: "POST",
+        body: JSON.stringify({ payload }),
+      },
       session,
     );
   }

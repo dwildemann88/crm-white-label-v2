@@ -21,6 +21,8 @@ import type {
   WhatsAppMediaPrepareInput,
   WhatsAppPreparedMediaMessage,
   WhatsAppTemplateSendInput,
+  WebhookEvent,
+  WebhookTestResult,
 } from "../core/types";
 
 export interface CrmGateway {
@@ -118,7 +120,16 @@ openWhatsAppConversation(
     session: Session,
     integrationId: string,
   ): Promise<void>;
-  testIntegration(session: Session, integrationId: string): Promise<void>;
+  listWebhookEvents(
+    session: Session,
+    integrationId?: string,
+    limit?: number,
+  ): Promise<WebhookEvent[]>;
+  testIntegration(
+    session: Session,
+    integrationId: string,
+    payload: Record<string, unknown>,
+  ): Promise<WebhookTestResult>;
 
   resetDemo(): Promise<void>;
 }
