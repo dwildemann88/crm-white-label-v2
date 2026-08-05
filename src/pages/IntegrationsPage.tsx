@@ -316,7 +316,7 @@ function IntegrationModal({
   const rotateSecret = async () => {
     if (!integration || saving) return;
     const confirmed = window.confirm(
-      "Gerar uma nova chave secreta? A chave atual deixará de funcionar imediatamente quando o receptor for publicado.",
+      "Gerar uma nova chave secreta? A chave atual deixará de funcionar imediatamente.",
     );
     if (!confirmed) return;
 
@@ -779,9 +779,9 @@ export function IntegrationsPage() {
             <AlertTriangle size={20} />
           </span>
           <div>
-            <small>Aguardando evento</small>
+            <small>Com atenção</small>
             <strong>{summary.attention}</strong>
-            <p>O receptor será publicado na próxima etapa</p>
+            <p>Sem eventos ou com erro recente</p>
           </div>
         </article>
       </section>
@@ -805,12 +805,11 @@ export function IntegrationsPage() {
         </button>
       </section>
 
-      <div className="integration-message warning webhook-stage-notice">
-        <AlertTriangle size={17} />
+      <div className="integration-message success webhook-stage-notice">
+        <ShieldCheck size={17} />
         <span>
-          A configuração e as credenciais já são reais. O endpoint ainda não
-          recebe leads nesta etapa; a Edge Function será instalada e testada na
-          Etapa 4A.2.
+          O receptor está ativo. Use o endpoint somente por uma automação ou
+          servidor seguro; não exponha a chave secreta no código público do site.
         </span>
       </div>
 
@@ -917,7 +916,7 @@ export function IntegrationsPage() {
                 ) : (
                   <div className="integration-message success">
                     <ShieldCheck size={16} />
-                    <span>Credencial protegida e roteamento salvo.</span>
+                    <span>Credencial protegida, roteamento salvo e receptor ativo.</span>
                   </div>
                 )}
               </div>
@@ -963,12 +962,13 @@ export function IntegrationsPage() {
         <div className="webhook-doc-header">
           <span>
             <Webhook size={18} />
-            <strong>Contrato previsto para a Etapa 4A.2</strong>
+            <strong>Contrato do webhook de leads</strong>
           </span>
         </div>
         <pre>{`POST ${webhookEndpoint()}
 x-crm-integration-key: whk_...
 Authorization: Bearer crm_...
+x-request-id: identificador-unico-opcional
 Content-Type: application/json
 
 {

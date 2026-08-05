@@ -2,6 +2,7 @@ import type { LucideIcon } from "lucide-react";
 import { useEffect } from "react";
 import { Check, ChevronDown, X } from "lucide-react";
 import type { LeadPriority, User } from "../core/types";
+import { useBodyScrollLock } from "../hooks/useBodyScrollLock";
 
 export function Avatar({
   user,
@@ -137,15 +138,14 @@ export function ModalShell({
   children: React.ReactNode;
   wide?: boolean;
 }) {
+  useBodyScrollLock();
+
   useEffect(() => {
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => {
-      document.body.style.overflow = previousOverflow;
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [onClose]);

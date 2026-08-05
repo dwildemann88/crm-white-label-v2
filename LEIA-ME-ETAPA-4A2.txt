@@ -1,0 +1,45 @@
+ETAPA 4A.2 — RECEPTOR GENÉRICO DE LEADS POR WEBHOOK
+
+OBJETIVO
+Ativar o endpoint receive-crm-lead e criar contatos/leads reais a partir dos
+mapeamentos configurados em Integrações > Webhooks de leads.
+
+ARQUIVOS
+- supabase/migrations/202608040001_receive_crm_lead.sql
+- supabase/functions/receive-crm-lead/index.ts
+- src/pages/IntegrationsPage.tsx
+
+ORDEM DE INSTALAÇÃO
+1. Copiar este pacote para a raiz do projeto e substituir os arquivos.
+2. Executar: npm run typecheck
+3. Aplicar no SQL Editor:
+   supabase/migrations/202608040001_receive_crm_lead.sql
+4. Publicar a função sem verificação JWT do gateway:
+   npx supabase functions deploy receive-crm-lead --no-verify-jwt
+5. Executar: npm run dev
+6. Testar usando o endpoint, public key e secret já criados no CRM.
+
+POR QUE --no-verify-jwt
+O cabeçalho Authorization transporta a chave secreta própria do webhook
+(Bearer crm_...), e não um JWT de usuário do Supabase. A autenticação é feita
+pela função usando o hash armazenado no banco.
+
+COMPORTAMENTO
+- valida x-crm-integration-key e Authorization: Bearer;
+- limita o payload a 256 KB;
+- aceita caminhos com ponto no mapeamento, como contact.name;
+- cria ou reutiliza contato por telefone/e-mail;
+- aplica campos padrão e personalizados;
+- respeita campos obrigatórios e o funil configurado;
+- trata duplicidade por ID externo, telefone/e-mail ou sempre criar;
+- suporta x-request-id opcional para idempotência;
+- registra eventos, falhas, último evento e contagem;
+- mantém isolamento total por organização;
+- não altera nenhuma Edge Function do WhatsApp.
+
+VALIDAÇÕES FEITAS NO PACOTE
+- sintaxe TypeScript/TSX: aprovada;
+- verify:contracts: aprovado;
+- verify:ui: aprovado.
+
+O typecheck completo deve ser executado no projeto local após a substituição.

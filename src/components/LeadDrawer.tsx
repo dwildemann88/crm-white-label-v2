@@ -33,6 +33,7 @@ import type {
   TagDefinition,
 } from "../core/types";
 import { currency, formatDateTime, uid } from "../core/utils";
+import { useBodyScrollLock } from "../hooks/useBodyScrollLock";
 import { Avatar, OriginBadge, PriorityBadge, TagSelector } from "./Common";
 
 function InfoRow({
@@ -149,15 +150,14 @@ export function LeadDrawer({
   const [newTag, setNewTag] = useState("");
   const [newTagColor, setNewTagColor] = useState("#2563eb");
 
+  useBodyScrollLock();
+
   useEffect(() => {
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => {
-      document.body.style.overflow = previousOverflow;
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [onClose]);
