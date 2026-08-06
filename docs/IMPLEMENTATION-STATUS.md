@@ -13,7 +13,8 @@ A reconstrução não renomeia nem remove os contratos usados atualmente para:
 - templates do WhatsApp;
 - recebimento de mensagens e atualização de status;
 - upload privado de mídias;
-- webhooks já conectados ao Make.
+- webhooks genéricos de leads já conectados ao Make;
+- integração direta do WhatsApp por organização na V5.2.
 
 ## Implementado no frontend
 
@@ -83,16 +84,16 @@ Esses dois recursos não foram implantados automaticamente no projeto remoto.
 
 ## Integrações
 
-O WhatsApp permanece com o fluxo atual e com os contratos existentes. A próxima evolução é associar cada conexão a uma organização pelo identificador do número ou conta, mantendo um único modelo de cenário no Make.
+O WhatsApp utiliza a Cloud API diretamente na V5.2. Cada organização possui uma conexão identificada por `phone_number_id`, com token criptografado e webhook assinado. O Make permanece no fluxo de Facebook Lead Ads e pode ser mantido temporariamente como rollback do transporte antigo do WhatsApp.
 
-Meta Lead Ads, Google Ads e Analytics aparecem como fundações de produto, não como conexões fictícias. Credenciais e status não podem ser definidos manualmente no navegador.
+Meta Lead Ads, Google Ads e Analytics continuam como integrações independentes. Credenciais sensíveis nunca são retornadas ao navegador.
 
 ## Validações executadas
 
 - parsing dos 32 arquivos TypeScript/TSX sem erro sintático;
-- parsing das 8 Edge Functions sem erro sintático;
+- parsing das Edge Functions alteradas na V5.2 sem erro sintático;
 - resolução de todos os imports relativos;
 - verificação automática dos contratos essenciais com `npm run verify:contracts`;
 - confirmação de ausência de `.env` e `.env.local` no pacote final.
 
-O build completo não pôde ser executado neste ambiente porque o acesso ao registro npm falhou por DNS (`EAI_AGAIN`). A instalação e o build devem ser executados no computador de desenvolvimento antes do deploy.
+O TypeScript e os verificadores de contrato passaram. O build do Vite não pôde ser concluído neste ambiente porque as dependências fornecidas no pacote de origem continham o binário nativo do Rollup para Windows, não para Linux. Execute `npm install` e `npm run build` no ambiente de publicação.

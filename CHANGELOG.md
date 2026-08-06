@@ -1,5 +1,37 @@
 # Changelog
 
+## 5.2.0 — WhatsApp Cloud API direto
+
+### Transporte e atendimento
+
+- envio de texto, mídia e templates passa a chamar diretamente a Graph API da Meta;
+- novo webhook nativo recebe mensagens e status sem transformação pelo Make;
+- roteamento multiempresa realizado pelo `phone_number_id`;
+- corrida entre o retorno do envio e o webhook de status tratada com novas tentativas curtas;
+- status externos não suportados pelo modelo atual são ignorados sem interromper o webhook.
+
+### Integração por organização
+
+- adicionada conexão manual por WABA ID, Phone Number ID e token;
+- validação de que o número pertence à WABA informada;
+- inscrição automática da WABA no aplicativo da Meta;
+- um número ativo por organização nesta primeira etapa;
+- teste e desconexão disponíveis na página de Integrações.
+
+### Segurança
+
+- token criptografado com AES-GCM antes de chegar ao banco;
+- credencial nunca retorna ao navegador;
+- assinatura `X-Hub-Signature-256` validada no webhook;
+- tabela de credenciais bloqueada para acesso direto de usuários autenticados.
+
+### Banco e publicação
+
+- adicionada a migration `202608050004_whatsapp_cloud_direct.sql`;
+- adicionadas as Edge Functions `manage-whatsapp-cloud-integration` e `whatsapp-cloud-webhook`;
+- substituído o transporte interno de `dispatch-whatsapp-message` e `dispatch-whatsapp-template`;
+- documentação operacional em `docs/WHATSAPP-CLOUD-DIRETO.md`.
+
 ## 5.1.0 — Ciclo completo do lead e receita comercial
 
 ### Leads e Kanban

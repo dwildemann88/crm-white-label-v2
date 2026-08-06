@@ -22,6 +22,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { useCrm } from "../app/CrmContext";
 import { ModalShell } from "../components/Common";
+import { WhatsAppCloudIntegration } from "../components/WhatsAppCloudIntegration";
 import { eligibleLeadOwners } from "../core/crmConsistency";
 import type {
   IntegrationConnection,
@@ -1096,6 +1097,8 @@ export function IntegrationsPage({
 
   return (
     <div className="integrations-page">
+      <WhatsAppCloudIntegration />
+
       <section className="integration-summary-grid">
         <article>
           <span className="integration-summary-icon blue">

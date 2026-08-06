@@ -1,17 +1,17 @@
-CRM COMERCIAL V5.1 — LEIA ANTES DE EXECUTAR
+CRM COMERCIAL V5.2 — LEIA ANTES DE EXECUTAR
 
 1. Extraia esta versão em uma pasta nova. Não copie arquivos por cima de versões anteriores.
 2. Copie seu .env.local funcional para a raiz. Ele não acompanha o ZIP.
-3. Esta versão altera profundamente o frontend, mas preserva RPCs, Edge Functions, Storage, Make e WhatsApp.
+3. A V5.2 substitui o Make somente no transporte do WhatsApp. O cenário de Facebook Lead Ads continua separado.
 4. Execute:
    npm install
    npm run verify
    npm run typecheck
-   npm run dev
-5. Valide em URL de prévia antes de publicar em produção.
-6. Teste obrigatoriamente: login, leads, filtros, Kanban, tarefas, relatórios, chat, mídias, templates e status.
-7. O sistema visual é fixo. Cada organização altera somente nome e logo.
-8. Indicadores e etapas agora devem abrir o recorte exato correspondente; trate qualquer navegação genérica como regressão.
-9. Responsável comercial precisa ter acesso ao funil. O atendimento do WhatsApp possui responsável próprio e também respeita o funil.
-10. Aplique a migration supabase/migrations/202608050003_lead_outcomes_delete_notifications.sql antes de publicar o frontend.
+   npm run build
+5. Aplique primeiro as migrations da V5.1 e depois `202608050004_whatsapp_cloud_direct.sql`.
+6. Cadastre as secrets e publique as Edge Functions conforme `docs/WHATSAPP-CLOUD-DIRETO.md`.
+7. Valide em URL de prévia antes de publicar em produção.
+8. Teste obrigatoriamente: login, leads, Kanban, perda, venda, transferência, relatórios, chat, texto, mídias, templates e status.
+9. Mantenha os cenários antigos do WhatsApp no Make como rollback até concluir a homologação.
+10. O sistema visual é fixo. Cada organização altera somente nome e logo.
 11. Nenhuma migration ou Edge Function é aplicada automaticamente por este pacote.

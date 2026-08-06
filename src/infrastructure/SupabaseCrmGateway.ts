@@ -34,6 +34,8 @@ import type {
   WhatsAppMediaPrepareInput,
   WhatsAppPreparedMediaMessage,
   WhatsAppTemplateSendInput,
+  WhatsAppCloudIntegrationInput,
+  WhatsAppCloudTestResult,
   WebhookEvent,
   WebhookEventOutcome,
   WebhookTestResult,
@@ -44,6 +46,33 @@ import { getCrmBootstrap, type BootstrapMembership } from "./supabase/bootstrap"
 const notReady = (feature: string): never => {
   throw new Error(`${feature} ainda não foi conectado ao Supabase.`);
 };
+
+async function edgeFunctionErrorMessage(error: unknown): Promise<string> {
+  const fallback =
+    error instanceof Error
+      ? error.message
+      : "A Edge Function retornou uma falha.";
+
+  const context =
+    error &&
+    typeof error === "object" &&
+    "context" in error
+      ? (error as { context?: Response }).context
+      : undefined;
+
+  if (!context) return fallback;
+
+  try {
+    const payload = (await context.clone().json()) as {
+      error?: unknown;
+    };
+    return typeof payload.error === "string" && payload.error.trim()
+      ? payload.error
+      : fallback;
+  } catch {
+    return fallback;
+  }
+}
 
 const WHATSAPP_MEDIA_BUCKET = "crm-whatsapp-media";
 const WHATSAPP_MEDIA_URL_TTL_SECONDS = 6 * 60 * 60;
@@ -622,6 +651,7 @@ export class SupabaseCrmGateway implements CrmGateway {
   contactsData,
   sourcesData,
   integrationsData,
+  whatsappIntegrationsData,
   leadsData,
   tagsData,
   leadTagsData,
@@ -683,6 +713,13 @@ export class SupabaseCrmGateway implements CrmGateway {
       canManageIntegrations
         ? requireData<any[]>(
             supabase.rpc("list_crm_webhook_integrations", {
+              p_organization_id: organizationId,
+            }),
+          )
+        : Promise.resolve([]),
+      canManageIntegrations
+        ? requireData<any[]>(
+            supabase.rpc("list_crm_whatsapp_integrations", {
               p_organization_id: organizationId,
             }),
           )
@@ -1329,7 +1366,7 @@ for (const reminder of remindersData) {
       };
     });
 
-    const integrations: IntegrationConnection[] = integrationsData.map(
+    const webhookIntegrations: IntegrationConnection[] = integrationsData.map(
       (item) => ({
         id: item.id,
         organizationId: item.organization_id,
@@ -1377,6 +1414,91 @@ for (const reminder of remindersData) {
       }),
     );
 
+    const whatsappIntegrations: IntegrationConnection[] =
+      whatsappIntegrationsData.map((item) => ({
+        id: String(item.id ?? ""),
+        organizationId: String(item.organization_id ?? organizationId),
+        provider: "whatsapp" as const,
+        name: String(item.name ?? "WhatsApp Cloud API"),
+        description: String(
+          item.description ?? "Atendimento direto pela API oficial da Meta.",
+        ),
+        status:
+          item.status === "connected" ||
+          item.status === "disconnected"
+            ? item.status
+            : "attention",
+        accountLabel: String(
+          item.account_label ??
+          item.display_phone_number ??
+          item.phone_number_id ??
+          "WhatsApp não identificado",
+        ),
+        endpoint: String(
+          item.endpoint ?? "/functions/v1/whatsapp-cloud-webhook",
+        ),
+        publicKey: String(item.phone_number_id ?? ""),
+        secretMasked: String(item.secret_masked ?? "••••••••••••"),
+        targetPipelineId: "",
+        targetStageId: "",
+        sourceId: "",
+        defaultOwnerId: null,
+        duplicateRule: "external_or_contact" as const,
+        active: item.active !== false,
+        fieldMappings: [],
+        lastEventAt:
+          typeof item.last_message_at === "string"
+            ? item.last_message_at
+            : null,
+        lastTestAt:
+          typeof item.last_test_at === "string"
+            ? item.last_test_at
+            : null,
+        eventsReceived: 0,
+        errors: Array.isArray(item.errors)
+          ? item.errors.filter(
+              (error: unknown): error is string =>
+                typeof error === "string",
+            )
+          : [],
+        wabaId:
+          typeof item.waba_id === "string"
+            ? item.waba_id
+            : undefined,
+        phoneNumberId:
+          typeof item.phone_number_id === "string"
+            ? item.phone_number_id
+            : undefined,
+        displayPhoneNumber:
+          typeof item.display_phone_number === "string"
+            ? item.display_phone_number
+            : undefined,
+        verifiedName:
+          typeof item.verified_name === "string"
+            ? item.verified_name
+            : undefined,
+        qualityRating:
+          typeof item.quality_rating === "string"
+            ? item.quality_rating
+            : null,
+        graphApiVersion:
+          typeof item.graph_api_version === "string"
+            ? item.graph_api_version
+            : undefined,
+        lastVerifiedAt:
+          typeof item.last_verified_at === "string"
+            ? item.last_verified_at
+            : null,
+        lastMessageAt:
+          typeof item.last_message_at === "string"
+            ? item.last_message_at
+            : null,
+        lastError:
+          typeof item.last_error === "string"
+            ? item.last_error
+            : null,
+      }));
+
     const notifications: NotificationItem[] = notificationsData.map((item) => ({
       id: item.id,
       organizationId: item.organization_id,
@@ -1402,7 +1524,7 @@ for (const reminder of remindersData) {
       tags,
       conversations,
       messages,
-      integrations,
+      integrations: [...whatsappIntegrations, ...webhookIntegrations],
       notifications,
     };
   }
@@ -3322,7 +3444,7 @@ if (input.id) {
       },
     );
 
-    if (error) throw new Error(error.message);
+    if (error) throw new Error(await edgeFunctionErrorMessage(error));
 
     const result =
       data && typeof data === "object" && !Array.isArray(data)
@@ -3350,6 +3472,126 @@ if (input.id) {
       outcome: created ? "created" : "duplicate",
     };
   }
+  async saveWhatsAppCloudIntegration(
+    session: Session,
+    input: WhatsAppCloudIntegrationInput,
+  ): Promise<void> {
+    const { data, error } = await supabase.functions.invoke(
+      "manage-whatsapp-cloud-integration",
+      {
+        body: {
+          action: "save",
+          organization_id: session.organizationId,
+          waba_id: input.wabaId.trim(),
+          phone_number_id: input.phoneNumberId.trim(),
+          display_phone_number: input.displayPhoneNumber.trim(),
+          graph_api_version: input.graphApiVersion.trim(),
+          access_token: input.accessToken.trim(),
+        },
+      },
+    );
+
+    if (error) throw new Error(await edgeFunctionErrorMessage(error));
+
+    const result =
+      data && typeof data === "object" && !Array.isArray(data)
+        ? (data as Record<string, unknown>)
+        : {};
+
+    if (result.ok !== true) {
+      throw new Error(
+        typeof result.error === "string"
+          ? result.error
+          : "A Meta não confirmou a conexão do WhatsApp.",
+      );
+    }
+  }
+
+  async testWhatsAppCloudIntegration(
+    session: Session,
+  ): Promise<WhatsAppCloudTestResult> {
+    const { data, error } = await supabase.functions.invoke(
+      "manage-whatsapp-cloud-integration",
+      {
+        body: {
+          action: "test",
+          organization_id: session.organizationId,
+        },
+      },
+    );
+
+    if (error) throw new Error(await edgeFunctionErrorMessage(error));
+
+    const payload =
+      data && typeof data === "object" && !Array.isArray(data)
+        ? (data as Record<string, unknown>)
+        : {};
+
+    if (payload.ok !== true) {
+      throw new Error(
+        typeof payload.error === "string"
+          ? payload.error
+          : "A conexão com a Meta não pôde ser validada.",
+      );
+    }
+
+    const result =
+      payload.result &&
+      typeof payload.result === "object" &&
+      !Array.isArray(payload.result)
+        ? (payload.result as Record<string, unknown>)
+        : {};
+
+    const phone =
+      payload.phone &&
+      typeof payload.phone === "object" &&
+      !Array.isArray(payload.phone)
+        ? (payload.phone as Record<string, unknown>)
+        : {};
+
+    return {
+      tested: result.tested === true,
+      integrationId: String(result.integration_id ?? ""),
+      status: "connected",
+      displayPhoneNumber: String(phone.display_phone_number ?? ""),
+      verifiedName: String(phone.verified_name ?? ""),
+      qualityRating:
+        typeof phone.quality_rating === "string"
+          ? phone.quality_rating
+          : null,
+      testedAt: String(result.tested_at ?? new Date().toISOString()),
+    };
+  }
+
+  async disconnectWhatsAppCloudIntegration(
+    session: Session,
+  ): Promise<void> {
+    const { data, error } = await supabase.functions.invoke(
+      "manage-whatsapp-cloud-integration",
+      {
+        body: {
+          action: "disconnect",
+          organization_id: session.organizationId,
+        },
+      },
+    );
+
+    if (error) throw new Error(await edgeFunctionErrorMessage(error));
+
+    const result =
+      data && typeof data === "object" && !Array.isArray(data)
+        ? (data as Record<string, unknown>)
+        : {};
+
+    if (result.ok !== true) {
+      throw new Error(
+        typeof result.error === "string"
+          ? result.error
+          : "O WhatsApp não pôde ser desconectado.",
+      );
+    }
+  }
+
   resetDemo(): Promise<void> {
     return Promise.resolve();
   }

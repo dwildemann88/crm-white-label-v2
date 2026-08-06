@@ -22,6 +22,8 @@ import type {
   WhatsAppMediaPrepareInput,
   WhatsAppPreparedMediaMessage,
   WhatsAppTemplateSendInput,
+  WhatsAppCloudIntegrationInput,
+  WhatsAppCloudTestResult,
   WebhookEvent,
   WebhookTestResult,
 } from "../core/types";
@@ -137,6 +139,17 @@ openWhatsAppConversation(
     integrationId: string,
     payload: Record<string, unknown>,
   ): Promise<WebhookTestResult>;
+
+  saveWhatsAppCloudIntegration?(
+    session: Session,
+    input: WhatsAppCloudIntegrationInput,
+  ): Promise<void>;
+  testWhatsAppCloudIntegration?(
+    session: Session,
+  ): Promise<WhatsAppCloudTestResult>;
+  disconnectWhatsAppCloudIntegration?(
+    session: Session,
+  ): Promise<void>;
 
   resetDemo(): Promise<void>;
 }

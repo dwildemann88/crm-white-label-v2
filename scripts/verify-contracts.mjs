@@ -9,9 +9,9 @@ const requiredFiles = [
   "supabase/functions/dispatch-whatsapp-message/index.ts",
   "supabase/functions/dispatch-whatsapp-template/index.ts",
   "supabase/functions/prepare-whatsapp-media-upload/index.ts",
-  "supabase/functions/receive-whatsapp-message/index.ts",
-  "supabase/functions/receive-whatsapp-status/index.ts",
-  "supabase/functions/store-whatsapp-media/index.ts",
+  "supabase/functions/whatsapp-cloud-webhook/index.ts",
+  "supabase/functions/manage-whatsapp-cloud-integration/index.ts",
+  "supabase/functions/_shared/whatsappCloud.ts",
   "supabase/functions/admin-manage-crm-user/index.ts",
   "supabase/migrations/202607230001_provision_crm_organization.sql",
 ];
@@ -40,7 +40,7 @@ for (const contract of requiredGatewayContracts) {
 
 const dispatchPath = resolve(root, "supabase/functions/dispatch-whatsapp-message/index.ts");
 const dispatch = existsSync(dispatchPath) ? readFileSync(dispatchPath, "utf8") : "";
-for (const token of ["MAKE_WHATSAPP_WEBHOOK_URL", "claim_crm_outbound_message", "complete_crm_outbound_message", "fail_crm_outbound_message"]) {
+for (const token of ["crm_whatsapp_integrations", "graphUrl", "claim_crm_outbound_message", "complete_crm_outbound_message", "fail_crm_outbound_message"]) {
   if (!dispatch.includes(token)) failures.push(`Contrato de despacho removido: ${token}`);
 }
 

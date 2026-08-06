@@ -32,6 +32,8 @@ import type {
   UserInput,
   WhatsAppMediaPrepareInput,
   WhatsAppTemplateSendInput,
+  WhatsAppCloudIntegrationInput,
+  WhatsAppCloudTestResult,
   WebhookEvent,
   WebhookTestResult,
 } from "../core/types";
@@ -113,6 +115,11 @@ savePipeline(pipeline: Pipeline): Promise<void>;
     integrationId: string,
     payload: Record<string, unknown>,
   ): Promise<WebhookTestResult>;
+  saveWhatsAppCloudIntegration(
+    input: WhatsAppCloudIntegrationInput,
+  ): Promise<void>;
+  testWhatsAppCloudIntegration(): Promise<WhatsAppCloudTestResult>;
+  disconnectWhatsAppCloudIntegration(): Promise<void>;
   resetDemo(): Promise<void>;
 }
 
@@ -1048,6 +1055,42 @@ removeUser(userId) {
       return executeResult(
         () => gateway.testIntegration(session!, integrationId, payload),
         "Lead de teste processado.",
+      );
+    },
+
+    saveWhatsAppCloudIntegration(input) {
+      if (!gateway.saveWhatsAppCloudIntegration) {
+        return Promise.reject(
+          new Error("A integração direta com WhatsApp não está disponível neste provedor."),
+        );
+      }
+      return execute(
+        () => gateway.saveWhatsAppCloudIntegration!(session!, input),
+        "WhatsApp conectado e validado.",
+      );
+    },
+
+    testWhatsAppCloudIntegration() {
+      if (!gateway.testWhatsAppCloudIntegration) {
+        return Promise.reject(
+          new Error("O teste direto do WhatsApp não está disponível neste provedor."),
+        );
+      }
+      return executeResult(
+        () => gateway.testWhatsAppCloudIntegration!(session!),
+        "Conexão com o WhatsApp validada.",
+      );
+    },
+
+    disconnectWhatsAppCloudIntegration() {
+      if (!gateway.disconnectWhatsAppCloudIntegration) {
+        return Promise.reject(
+          new Error("A desconexão do WhatsApp não está disponível neste provedor."),
+        );
+      }
+      return execute(
+        () => gateway.disconnectWhatsAppCloudIntegration!(session!),
+        "WhatsApp desconectado.",
       );
     },
 

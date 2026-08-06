@@ -1,10 +1,10 @@
-# CRM Comercial Multiempresa — V5
+# CRM Comercial Multiempresa — V5.2
 
 Aplicação React + TypeScript para operação comercial multiempresa, conectada ao Supabase e preparada para integrações externas.
 
 ## Estado do produto
 
-A V5 reconstrói a experiência de uso sem modificar os contratos operacionais existentes. Permanecem preservados:
+A V5.2 preserva a experiência operacional da V5.1 e adiciona integração direta com a WhatsApp Cloud API. Permanecem disponíveis:
 
 - autenticação e isolamento por organização;
 - cadastro, edição, filtragem e movimentação de leads;
@@ -14,7 +14,9 @@ A V5 reconstrói a experiência de uso sem modificar os contratos operacionais e
 - conversas do WhatsApp;
 - envio e recebimento de texto, imagens, áudios, vídeos e documentos;
 - templates e atualização de status;
-- RPCs, Edge Functions, Storage e payloads já utilizados pelo Make.
+- RPCs, Edge Functions e Storage do fluxo de atendimento;
+- integração direta por organização com WhatsApp Cloud API;
+- Make mantido apenas para integrações separadas, como Facebook Lead Ads, ou rollback temporário.
 
 ## Sistema visual
 
@@ -28,7 +30,16 @@ O white-label altera somente:
 
 Paleta, contraste, tipografia, espaçamento, componentes e cores semânticas permanecem padronizados. Isso impede que uma organização crie uma interface ilegível ou inconsistente.
 
-## Principais correções da V5
+## Principais recursos da V5.2
+
+- conexão manual de um número WhatsApp por organização;
+- token criptografado no backend;
+- mensagens e status recebidos diretamente da Meta;
+- envio direto de texto, mídia e templates;
+- validação de WABA, Phone Number ID e inscrição do webhook;
+- ciclo completo de lead, perda, venda, exclusão e transferência da V5.1.
+
+## Base visual e operacional da V5
 
 - interface única, sem sobreposição de temas antigos;
 - escala tipográfica legível e densidade operacional consistente;
@@ -87,6 +98,7 @@ Publique primeiro em uma URL de prévia e execute o checklist de `docs/PRODUCTIO
 - `docs/PRODUCTION-CHECKLIST.md`
 - `docs/INTEGRATIONS.md`
 - `docs/IMPLEMENTATION-STATUS.md`
+- `docs/WHATSAPP-CLOUD-DIRETO.md`
 
 ## Auditoria visual e funcional
 

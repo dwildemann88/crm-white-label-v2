@@ -25,6 +25,8 @@ import type {
   UserInput,
   WebhookEvent,
   WebhookTestResult,
+  WhatsAppCloudIntegrationInput,
+  WhatsAppCloudTestResult,
 } from "../core/types";
 import { initials, normalizePhone, nowIso, sleep, uid } from "../core/utils";
 import { seedDatabase } from "../data/seed";
@@ -2235,6 +2237,136 @@ async openWhatsAppConversation(
       requestId,
       outcome: "created",
     };
+  }
+
+  async saveWhatsAppCloudIntegration(
+    session: Session,
+    input: WhatsAppCloudIntegrationInput,
+  ): Promise<void> {
+    const database = readDatabase();
+    const actor = currentUser(database, session);
+    if (!can(actor, "integrations.manage")) {
+      throw new Error("Sem permissão para gerenciar integrações.");
+    }
+
+    const wabaId = input.wabaId.trim();
+    const phoneNumberId = input.phoneNumberId.trim();
+    if (!/^\d+$/.test(wabaId) || !/^\d+$/.test(phoneNumberId)) {
+      throw new Error("WABA ID e Phone Number ID devem ser numéricos.");
+    }
+
+    const existing = database.integrations.find(
+      (item) =>
+        item.organizationId === session.organizationId &&
+        item.provider === "whatsapp",
+    );
+
+    const saved: IntegrationConnection = {
+      id: existing?.id ?? uid("whatsapp"),
+      organizationId: session.organizationId,
+      provider: "whatsapp",
+      name: "WhatsApp Cloud API",
+      description: "Atendimento direto pela API oficial da Meta.",
+      status: "connected",
+      accountLabel:
+        input.displayPhoneNumber.trim() ||
+        existing?.accountLabel ||
+        phoneNumberId,
+      endpoint: "/functions/v1/whatsapp-cloud-webhook",
+      publicKey: phoneNumberId,
+      secretMasked: input.accessToken.trim()
+        ? `••••••••••••${input.accessToken.trim().slice(-4)}`
+        : existing?.secretMasked ?? "••••••••••••",
+      targetPipelineId: "",
+      targetStageId: "",
+      sourceId: "",
+      defaultOwnerId: null,
+      duplicateRule: "external_or_contact",
+      active: true,
+      fieldMappings: [],
+      lastEventAt: existing?.lastEventAt ?? null,
+      lastTestAt: nowIso(),
+      eventsReceived: existing?.eventsReceived ?? 0,
+      errors: [],
+      wabaId,
+      phoneNumberId,
+      displayPhoneNumber: input.displayPhoneNumber.trim(),
+      verifiedName: existing?.verifiedName ?? "Empresa de demonstração",
+      qualityRating: existing?.qualityRating ?? "GREEN",
+      graphApiVersion: input.graphApiVersion.trim() || "v25.0",
+      lastVerifiedAt: nowIso(),
+      lastMessageAt: existing?.lastMessageAt ?? null,
+      lastError: null,
+    };
+
+    if (existing) {
+      database.integrations = database.integrations.map((item) =>
+        item.id === existing.id ? saved : item,
+      );
+    } else {
+      database.integrations.push(saved);
+    }
+
+    writeDatabase(database);
+  }
+
+  async testWhatsAppCloudIntegration(
+    session: Session,
+  ): Promise<WhatsAppCloudTestResult> {
+    const database = readDatabase();
+    const actor = currentUser(database, session);
+    if (!can(actor, "integrations.manage")) {
+      throw new Error("Sem permissão para testar integrações.");
+    }
+
+    const integration = database.integrations.find(
+      (item) =>
+        item.organizationId === session.organizationId &&
+        item.provider === "whatsapp",
+    );
+    if (!integration || !integration.active) {
+      throw new Error("O WhatsApp ainda não está conectado.");
+    }
+
+    const testedAt = nowIso();
+    integration.status = "connected";
+    integration.lastTestAt = testedAt;
+    integration.lastVerifiedAt = testedAt;
+    integration.errors = [];
+    writeDatabase(database);
+
+    return {
+      tested: true,
+      integrationId: integration.id,
+      status: "connected",
+      displayPhoneNumber:
+        integration.displayPhoneNumber ?? integration.accountLabel,
+      verifiedName: integration.verifiedName ?? "Empresa de demonstração",
+      qualityRating: integration.qualityRating ?? "GREEN",
+      testedAt,
+    };
+  }
+
+  async disconnectWhatsAppCloudIntegration(
+    session: Session,
+  ): Promise<void> {
+    const database = readDatabase();
+    const actor = currentUser(database, session);
+    if (!can(actor, "integrations.manage")) {
+      throw new Error("Sem permissão para gerenciar integrações.");
+    }
+
+    const integration = database.integrations.find(
+      (item) =>
+        item.organizationId === session.organizationId &&
+        item.provider === "whatsapp",
+    );
+    if (!integration) throw new Error("Integração WhatsApp não encontrada.");
+
+    integration.active = false;
+    integration.status = "disconnected";
+    integration.errors = [];
+    writeDatabase(database);
   }
 
   async resetDemo() {

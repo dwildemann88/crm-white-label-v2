@@ -39,3 +39,19 @@ Não aplique os recursos abaixo diretamente em produção sem staging:
 - `supabase/migrations/202607230001_provision_crm_organization.sql`.
 
 A publicação somente do frontend não altera o banco, as Edge Functions existentes nem os cenários do Make. O cadastro de usuários e a criação transacional de novas empresas exigem implantação separada dos recursos acima.
+
+## Publicação da V5.2.0 — WhatsApp direto
+
+Esta versão altera banco e Edge Functions. Não basta publicar o frontend.
+
+Ordem obrigatória:
+
+1. aplicar `202608050004_whatsapp_cloud_direct.sql`;
+2. cadastrar secrets da Meta e da criptografia;
+3. publicar `manage-whatsapp-cloud-integration`;
+4. publicar as duas funções de despacho;
+5. publicar `whatsapp-cloud-webhook --no-verify-jwt`;
+6. configurar callback e campo `messages` na Meta;
+7. conectar um número de homologação no CRM;
+8. concluir o checklist de `docs/WHATSAPP-CLOUD-DIRETO.md`;
+9. somente então desativar o transporte do WhatsApp no Make.

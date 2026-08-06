@@ -1,42 +1,27 @@
 # Integrações externas
 
-A página de integrações desta base configura o destino, o responsável padrão e o mapeamento dos campos. O teste atual é local e serve para validar o fluxo da interface. A conexão real depende dos endpoints abaixo.
+## Facebook Lead Ads
+
+O fluxo atualmente validado utiliza:
+
+```text
+Facebook Lead Ads → Make → receive-crm-lead → Supabase → CRM
+```
+
+O Make consulta os detalhes do lead, normaliza o payload e envia ao endpoint do CRM com autenticação própria e idempotência por ID do lead.
 
 ## Entrada genérica
 
 Cada página, simulador ou cenário recebe uma chave própria.
 
 ```http
-POST /public/leads/webhook_7a91
+POST /functions/v1/receive-crm-lead
+x-crm-integration-key: <public-key>
 Authorization: Bearer <secret>
 Content-Type: application/json
 ```
 
-O backend deve:
-
-1. validar a chave;
-2. registrar o payload bruto;
-3. normalizar telefone e e-mail;
-4. aplicar o mapeamento salvo;
-5. deduplicar por `external_id`, telefone e e-mail;
-6. criar ou atualizar o lead;
-7. aplicar funil, etapa, responsável e etiquetas;
-8. gerar histórico e notificação;
-9. publicar o evento em tempo real.
-
-## Meta Lead Ads
-
-Necessário:
-
-- aplicativo no Meta for Developers;
-- empresa e Página autorizadas;
-- assinatura do campo `leadgen`;
-- token armazenado de forma criptografada;
-- consulta dos dados completos pelo identificador do lead;
-- idempotência pelo ID externo;
-- seleção de Página, formulário, funil e mapeamento.
-
-A interface já possui o local para configurar destino e mapeamento. O backend deverá realizar OAuth, guardar credenciais e registrar os webhooks.
+O backend valida a chave, registra o payload, aplica mapeamento, deduplicação, funil, etapa, responsável e campos personalizados.
 
 ## Google
 
@@ -47,45 +32,38 @@ Existem dois fluxos:
 
 Cada origem deve ter chave independente para permitir revogação e rastreamento.
 
-## WhatsApp Business Platform
+## WhatsApp Business Platform — integração direta
 
-O CRM utiliza um número empresarial compartilhado por todos os usuários autorizados.
+A partir da V5.2.0, o Make não transporta mensagens do WhatsApp.
 
 Recebimento:
 
 ```text
-Webhook Meta → backend → banco → Realtime/WebSocket → tela do atendente
+Webhook Meta → whatsapp-cloud-webhook → banco → Realtime → tela do atendente
 ```
 
 Envio:
 
 ```text
-Tela → backend → Cloud API → status por webhook → banco → tela
+Tela → dispatch-whatsapp-message → Graph API → webhook de status → banco → tela
 ```
+
+A configuração é feita por organização com WABA ID, Phone Number ID e token de usuário de sistema. O token é criptografado no backend e não fica acessível pelo frontend.
 
 Regras:
 
+- um número ativo por organização nesta etapa;
+- roteamento da empresa pelo `phone_number_id`;
 - uma conversa possui responsável atual;
-- após transferência, `signature_pending = true`;
-- a próxima mensagem recebe `Nome | Cargo` no corpo;
-- todos os usuários autorizados consultam o histórico conforme seu escopo;
-- respostas simultâneas podem ser bloqueadas por posse ou trava curta;
-- tokens nunca ficam no frontend;
-- anexos devem ser validados, armazenados e enviados pelo backend;
-- janela de atendimento e templates precisam ser respeitados.
+- a próxima mensagem após transferência preserva a assinatura prevista pelo CRM;
+- anexos são armazenados no bucket privado e entregues à Meta por URL temporária;
+- mensagens recebidas criam ou localizam contato, lead e conversa;
+- janela de atendimento e templates continuam obrigatórios;
+- `sent`, `delivered`, `read` e `failed` são atualizados pelo webhook;
+- o webhook valida a assinatura HMAC enviada pela Meta.
+
+A publicação detalhada está em `docs/WHATSAPP-CLOUD-DIRETO.md`.
 
 ## Atualização em tempo real
 
-Para o backend real, use Supabase Realtime ou WebSocket para publicar eventos como:
-
-```text
-lead.created
-lead.updated
-lead.moved
-lead.assigned
-task.created
-task.completed
-message.received
-message.status_changed
-notification.created
-```
+O Supabase Realtime publica alterações de leads, tarefas, conversas, mensagens, status e notificações conforme as tabelas já cadastradas na publicação.

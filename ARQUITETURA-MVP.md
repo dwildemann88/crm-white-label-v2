@@ -13,8 +13,8 @@ CrmGateway
 Supabase Auth + PostgreSQL + RLS + RPCs + Realtime + Storage
         ↓
 Edge Functions
-        ↓
-Make + WhatsApp Business Cloud
+ ├── Meta Graph API / WhatsApp Cloud API
+ └── Make para Facebook Lead Ads e integrações auxiliares
 ```
 
 ## Núcleo operacional
@@ -43,6 +43,6 @@ Funis, etapas, etiquetas, campos personalizados e identificação da empresa uti
 
 ## Integrações
 
-O WhatsApp mantém os contratos atuais do gateway, Edge Functions e Make. A evolução multiempresa deve identificar a organização pela conexão ou por `phone_number_id`, preservando um modelo genérico no Make.
+O WhatsApp utiliza Edge Functions próprias e a Graph API da Meta. A organização é identificada pelo `phone_number_id` recebido no webhook. O Make não participa do transporte das mensagens na V5.2.
 
 Credenciais não são armazenadas no frontend.

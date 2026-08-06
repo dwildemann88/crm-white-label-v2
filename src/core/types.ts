@@ -354,6 +354,26 @@ export interface WebhookTestResult {
   outcome: "created" | "duplicate";
 }
 
+
+
+export interface WhatsAppCloudIntegrationInput {
+  wabaId: string;
+  phoneNumberId: string;
+  displayPhoneNumber: string;
+  graphApiVersion: string;
+  accessToken: string;
+}
+
+export interface WhatsAppCloudTestResult {
+  tested: boolean;
+  integrationId: string;
+  status: IntegrationStatus;
+  displayPhoneNumber: string;
+  verifiedName: string;
+  qualityRating: string | null;
+  testedAt: string;
+}
+
 export interface IntegrationConnection {
   id: string;
   organizationId: string;
@@ -376,6 +396,15 @@ export interface IntegrationConnection {
   lastTestAt: string | null;
   eventsReceived: number;
   errors: string[];
+  wabaId?: string;
+  phoneNumberId?: string;
+  displayPhoneNumber?: string;
+  verifiedName?: string;
+  qualityRating?: string | null;
+  graphApiVersion?: string;
+  lastVerifiedAt?: string | null;
+  lastMessageAt?: string | null;
+  lastError?: string | null;
 }
 
 export interface NotificationItem {
